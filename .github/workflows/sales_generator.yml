@@ -1,4 +1,4 @@
-name: Generate Sales Data (Manual)
+name: Manual Sales Data Generator (Test)
 
 on:
   workflow_dispatch:
@@ -8,19 +8,23 @@ on:
         required: false
         type: string
         default: ''
-      db_file:
-        description: 'Nombre del archivo de base de datos SQLite'
+      commit_message:
+        description: 'Mensaje de commit personalizado (opcional)'
         required: false
         type: string
-        default: 'sales_monitoring.db'
+        default: ''
 
 jobs:
-  generate-sales:
+  generate-and-commit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Needed to commit back to the repository
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Full history for commit
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,25 +37,44 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas numpy openai
 
-      - name: Run sales generator
+      - name: Run sales generator (test mode)
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
-          # Cambiar al directorio donde está el script (ajusta si es necesario)
           cd scripts
-          
-          # Construir comando: si se proporciona fecha, la agrega
-          CMD="python 1_sales_generator.py --db ${{ github.event.inputs.db_file }}"
-          if [ -n "${{ github.event.inputs.target_date }}" ]; then
-            CMD="$CMD --date ${{ github.event.inputs.target_date }}"
+          if [ -z "${{ github.event.inputs.target_date }}" ]; then
+            python 1_sales_generator.py
+          else
+            python 1_sales_generator.py --date ${{ github.event.inputs.target_date }}
           fi
-          echo "Ejecutando: $CMD"
-          eval $CMD
 
-      - name: Upload database artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sales-data-db
-          path: scripts/${{ github.event.inputs.db_file }}
-          retention-days: 7
+      - name: Commit and push generated database
+        run: |
+          # Configure git user (GitHub Actions bot)
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add all new/modified database files (data/sales/*.db)
+          git add data/sales/*.db
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No new database files to commit."
+          else
+            # Set commit message
+            if [ -n "${{ github.event.inputs.commit_message }}" ]; then
+              COMMIT_MSG="${{ github.event.inputs.commit_message }}"
+            else
+              # Extract date from the most recent .db file
+              LATEST_DB=$(ls -t data/sales/*.db 2>/dev/null | head -1)
+              if [ -n "$LATEST_DB" ]; then
+                DB_DATE=$(basename "$LATEST_DB" | sed 's/sales_\(.*\)\.db/\1/')
+                COMMIT_MSG="Add sales data for $DB_DATE"
+              else
+                COMMIT_MSG="Update sales databases"
+              fi
+            fi
+            git commit -m "$COMMIT_MSG"
+            git push
+            echo "Committed and pushed successfully."
+          fi
