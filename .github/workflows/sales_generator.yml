@@ -18,13 +18,13 @@ jobs:
   generate-and-commit:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # Needed to commit back to the repository
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # Full history for commit
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,35 +37,30 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas numpy openai
 
-      - name: Run sales generator (test mode)
+      - name: Run sales generator
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
-          cd scripts
           if [ -z "${{ github.event.inputs.target_date }}" ]; then
-            python 1_sales_generator.py
+            python scripts/1_sales_generator.py
           else
-            python 1_sales_generator.py --date ${{ github.event.inputs.target_date }}
+            python scripts/1_sales_generator.py --date ${{ github.event.inputs.target_date }}
           fi
 
-      - name: Commit and push generated database
+      - name: Commit and push generated databases
         run: |
-          # Configure git user (GitHub Actions bot)
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Add all new/modified database files (data/sales/*.db)
-          git add data/sales/*.db
+          # Add all database files (sales, stores, products)
+          git add data/sales/*.db data/stores/*.db data/products/*.db || true
           
-          # Check if there are changes to commit
           if git diff --staged --quiet; then
             echo "No new database files to commit."
           else
-            # Set commit message
             if [ -n "${{ github.event.inputs.commit_message }}" ]; then
               COMMIT_MSG="${{ github.event.inputs.commit_message }}"
             else
-              # Extract date from the most recent .db file
               LATEST_DB=$(ls -t data/sales/*.db 2>/dev/null | head -1)
               if [ -n "$LATEST_DB" ]; then
                 DB_DATE=$(basename "$LATEST_DB" | sed 's/sales_\(.*\)\.db/\1/')
