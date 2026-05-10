@@ -37,18 +37,21 @@ jobs:
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
+          # Cambiar al directorio donde está el script (ajusta si es necesario)
+          cd scripts
+          
           # Construir comando: si se proporciona fecha, la agrega
-          CMD="python sales_generator.py --db ${{ github.event.inputs.db_file }}"
+          CMD="python 1_sales_generator.py --db ${{ github.event.inputs.db_file }}"
           if [ -n "${{ github.event.inputs.target_date }}" ]; then
             CMD="$CMD --date ${{ github.event.inputs.target_date }}"
           fi
           echo "Ejecutando: $CMD"
           eval $CMD
 
-      - name: Upload database artifact (optional)
+      - name: Upload database artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sales-data-db
-          path: ${{ github.event.inputs.db_file }}
+          path: scripts/${{ github.event.inputs.db_file }}
           retention-days: 7
