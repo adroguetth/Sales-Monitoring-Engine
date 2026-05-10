@@ -1,7 +1,6 @@
 # .github/workflows/manual_sales_generation.yml
-# Sales Monitoring Engine - Manual Workflow
+# Sales Monitoring Engine - Manual Workflow (CORREGIDO)
 # Trigger: manual dispatch only (workflow_dispatch)
-# Script location: scripts/sales_generator.py
 
 name: Sales Monitoring Engine - Manual Generation
 
@@ -33,11 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # Step 1: Checkout repository code
       - name: Checkout repository
         uses: actions/checkout@v4
       
-      # Step 2: Verify script exists in scripts folder
       - name: Verify script location
         run: |
           if [ -f "scripts/sales_generator.py" ]; then
@@ -45,41 +42,30 @@ jobs:
             ls -la scripts/
           else
             echo "❌ ERROR: scripts/sales_generator.py not found"
-            echo "Current directory structure:"
             ls -la
-            if [ -d "scripts" ]; then
-              ls -la scripts/
-            fi
             exit 1
           fi
       
-      # Step 3: Setup Python environment
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
       
-      # Step 4: Install dependencies
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pandas numpy openai
       
-      # Step 5: Verify DeepSeek API key exists
       - name: Verify DeepSeek API configuration
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           if [ -z "$DEEPSEEK_API_KEY" ]; then
-            echo "⚠️ WARNING: DEEPSEEK_API_KEY not found in secrets."
-            echo "Running in OFFLINE mode (no AI pattern recognition)."
-            echo "To enable intelligent generation, add DEEPSEEK_API_KEY to repository secrets."
+            echo "⚠️ WARNING: DEEPSEEK_API_KEY not found - running in OFFLINE mode"
           else
             echo "✅ DeepSeek API key found - Intelligent mode ACTIVE"
           fi
       
-      # Step 6: Generate sales data
       - name: Generate sales data
         id: generate
         env:
@@ -92,66 +78,59 @@ jobs:
           echo "============================================"
           echo "Sales Monitoring Engine - Data Generation"
           echo "============================================"
-          echo "Script: scripts/sales_generator.py"
           echo "Target date: ${TARGET_DATE:-yesterday}"
           echo "Days to generate: $DAYS"
           echo "Database: $DB_NAME"
           echo "============================================"
           
-          # Make script executable
           chmod +x scripts/sales_generator.py
           
-          # Run generation for each day
+          # Generate for single date or multiple days
           if [ -z "$TARGET_DATE" ]; then
-            # Generate for yesterday (default)
             python scripts/sales_generator.py --db "$DB_NAME"
           else
-            # Generate for specific date
             python scripts/sales_generator.py --date "$TARGET_DATE" --db "$DB_NAME"
           fi
           
           # Generate multiple days if requested
           if [ "$DAYS" -gt 1 ]; then
-            echo "Generating $DAYS days of data..."
-            
-            # Calculate start date
             if [ -z "$TARGET_DATE" ]; then
               START_DATE=$(date -d 'yesterday' +%Y-%m-%d)
             else
               START_DATE="$TARGET_DATE"
             fi
             
-            # Generate from start_date backwards
-            for i in $(seq 1 $DAYS); do
-              if [ $i -eq 1 ]; then
-                CURRENT_DATE="$START_DATE"
-              else
-                CURRENT_DATE=$(date -d "$START_DATE - $((i-1)) days" +%Y-%m-%d)
-              fi
+            for i in $(seq 2 $DAYS); do
+              CURRENT_DATE=$(date -d "$START_DATE - $((i-1)) days" +%Y-%m-%d)
               echo "Processing: $CURRENT_DATE"
               python scripts/sales_generator.py --date "$CURRENT_DATE" --db "$DB_NAME"
             done
           fi
           
-          # Get database size and record count
+          # Get database info
           if [ -f "$DB_NAME" ]; then
             DB_SIZE=$(du -h "$DB_NAME" | cut -f1)
             echo "db_size=$DB_SIZE" >> $GITHUB_OUTPUT
             
-            # Count records
-            python -c "
-            import sqlite3
-            try:
-                conn = sqlite3.connect('$DB_NAME')
-                cursor = conn.cursor()
-                cursor.execute('SELECT COUNT(*) FROM sales_data')
-                count = cursor.fetchone()[0]
-                print(f'record_count={count}')
-                conn.close()
-            except Exception as e:
-                print(f'record_count=0')
-                print(f'Error: {e}')
-            " >> $GITHUB_OUTPUT
+            # Count records - FIXED INDENTATION
+            python3 << 'EOF'
+import sqlite3
+import os
+db_name = os.environ.get('DB_NAME', 'sales_monitoring.db')
+try:
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM sales_data')
+    count = cursor.fetchone()[0]
+    conn.close()
+    # Append to GITHUB_OUTPUT
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+        f.write(f'record_count={count}\n')
+except Exception as e:
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+        f.write('record_count=0\n')
+    print(f"Error: {e}")
+EOF
           else
             echo "db_size=0" >> $GITHUB_OUTPUT
             echo "record_count=0" >> $GITHUB_OUTPUT
@@ -159,20 +138,19 @@ jobs:
             exit 1
           fi
       
-      # Step 7: Upload database as artifact
       - name: Upload database artifact
         uses: actions/upload-artifact@v4
         with:
           name: sales-data-${{ github.run_id }}
           path: ${{ github.event.inputs.database_name }}
           retention-days: 30
-          compression-level: 6
       
-      # Step 8: Generate data summary
       - name: Generate data summary
         if: always()
         run: |
           DB_NAME="${{ github.event.inputs.database_name }}"
+          RECORD_COUNT="${{ steps.generate.outputs.record_count }}"
+          DB_SIZE="${{ steps.generate.outputs.db_size }}"
           
           echo "============================================"
           echo "DATA GENERATION SUMMARY"
@@ -182,82 +160,69 @@ jobs:
           echo "Triggered by: ${{ github.actor }}"
           echo "Date: $(date)"
           echo ""
-          echo "Script location: scripts/sales_generator.py"
           echo "Database: $DB_NAME"
-          echo "Size: ${{ steps.generate.outputs.db_size }}"
-          echo "Records: ${{ steps.generate.outputs.record_count }}"
+          echo "Size: ${DB_SIZE:-0}"
+          echo "Records: ${RECORD_COUNT:-0}"
           echo ""
           
-          # Display sample data if available
-          if [ -f "$DB_NAME" ] && [ "${{ steps.generate.outputs.record_count }}" -gt 0 ]; then
+          if [ -f "$DB_NAME" ] && [ "${RECORD_COUNT:-0}" -gt 0 ]; then
             echo "📊 SAMPLE DATA (last 10 records):"
             echo "----------------------------------------"
-            python -c "
-            import sqlite3
-            import pandas as pd
-            conn = sqlite3.connect('$DB_NAME')
-            df = pd.read_sql_query('''
-                SELECT date, store_id, product_id, units_sold, revenue, 
-                       promotion_flag, stockout_flag
-                FROM sales_data 
-                ORDER BY date DESC, store_id, product_id 
-                LIMIT 10
-            ''', conn)
-            print(df.to_string(index=False))
-            conn.close()
-            "
+            python3 << EOF
+import sqlite3
+import pandas as pd
+conn = sqlite3.connect('$DB_NAME')
+df = pd.read_sql_query('''
+    SELECT date, store_id, product_id, units_sold, revenue, 
+           promotion_flag, stockout_flag
+    FROM sales_data 
+    ORDER BY date DESC, store_id, product_id 
+    LIMIT 10
+''', conn)
+print(df.to_string(index=False))
+conn.close()
+EOF
             echo ""
             echo "----------------------------------------"
             echo ""
             echo "📊 SUMMARY BY STORE:"
-            python -c "
-            import sqlite3
-            conn = sqlite3.connect('$DB_NAME')
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT store_id, 
-                       COUNT(*) as transactions,
-                       SUM(units_sold) as total_units,
-                       SUM(revenue) as total_revenue,
-                       SUM(CASE WHEN promotion_flag=1 THEN 1 ELSE 0 END) as promos
-                FROM sales_data
-                GROUP BY store_id
-                ORDER BY store_id
-            ''')
-            results = cursor.fetchall()
-            print(f\"{'Store':<6} {'Transactions':<14} {'Total Units':<12} {'Total Revenue':<15} {'Promos':<8}\")
-            print(\"-\" * 60)
-            for row in results:
-                print(f\"{row[0]:<6} {row[1]:<14} {row[2]:<12} {row[3]:<15.2f} {row[4]:<8}\")
-            conn.close()
-            "
+            python3 << EOF
+import sqlite3
+conn = sqlite3.connect('$DB_NAME')
+cursor = conn.cursor()
+cursor.execute('''
+    SELECT store_id, 
+           COUNT(*) as transactions,
+           SUM(units_sold) as total_units,
+           SUM(revenue) as total_revenue,
+           SUM(CASE WHEN promotion_flag=1 THEN 1 ELSE 0 END) as promos
+    FROM sales_data
+    GROUP BY store_id
+    ORDER BY store_id
+''')
+results = cursor.fetchall()
+print(f"{'Store':<6} {'Transactions':<14} {'Total Units':<12} {'Total Revenue':<15} {'Promos':<8}")
+print("-" * 65)
+for row in results:
+    print(f"{row[0]:<6} {row[1]:<14} {row[2]:<12} {row[3]:<15.2f} {row[4]:<8}")
+conn.close()
+EOF
             echo ""
-            echo "✅ Artifact available for download: sales-data-${{ github.run_id }}"
+            echo "✅ Artifact available: sales-data-${{ github.run_id }}"
           else
-            echo "❌ Database file not found or empty"
+            echo "⚠️ Database has no records"
           fi
           echo "============================================"
       
-      # Step 9: Success notification
       - name: Completion status
         if: success()
         run: |
           echo "✅ Sales data generation completed successfully!"
-          echo "📥 Download the artifact: sales-data-${{ github.run_id }}"
-          echo ""
-          echo "To query the database:"
-          echo "  sqlite3 ${{ github.event.inputs.database_name }} \"SELECT * FROM sales_data LIMIT 5;\""
+          echo "📥 Download artifact: sales-data-${{ github.run_id }}"
       
-      # Step 10: Failure notification
       - name: Failure notification
         if: failure()
         run: |
           echo "❌ Sales data generation failed!"
-          echo "Check the logs above for details."
-          echo ""
-          echo "Common issues:"
-          echo "  1. Script not found in scripts/sales_generator.py"
-          echo "  2. Missing Python dependencies"
-          echo "  3. Database write permissions"
-          echo "  4. Invalid date format"
+          echo "Check logs above for details."
           exit 1
