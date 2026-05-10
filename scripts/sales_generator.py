@@ -1,13 +1,6 @@
 """
 Sales Monitoring Engine - Intelligent Sales Data Generator
-Version: 3.0 - DeepSeek-powered with realistic patterns
-Repository: GitHub Actions compatible
-Author: Sales Monitoring Engine Team
 
-Technical Description:
-This module generates synthetic daily sales data for 5 stores and 25 products
-using DeepSeek API for pattern recognition and realistic behavior simulation.
-Includes holiday effects, seasonality, stockouts, promotions, and store-specific factors.
 """
 
 import os
@@ -187,6 +180,7 @@ PROMOTION_TYPES = {
     "bogo_2+1": {"base_multiplier": 1.5, "decay": 0.15, "duration_days": 3},
     "bogo_3+2": {"base_multiplier": 1.3, "decay": 0.15, "duration_days": 3},
     "discount_10": {"base_multiplier": 1.3, "decay": 0.10, "duration_days": 7},
+    "discount_15": {"base_multiplier": 1.5, "decay": 0.10, "duration_days": 7},
     "discount_20": {"base_multiplier": 1.7, "decay": 0.10, "duration_days": 7},
     "discount_30": {"base_multiplier": 2.2, "decay": 0.10, "duration_days": 15},
 }
@@ -660,9 +654,16 @@ class SalesDataGenerator:
         
         if count > 0:
             # First day after promo: 15% drop, recovers linearly
-            days_after = (date - datetime.strptime(cursor.execute(
+            cursor.execute(
                 "SELECT MAX(date) FROM sales_data WHERE product_id=? AND store_id=? AND promotion_flag=1",
-                (product_id, store_id)).fetchone()[0], "%Y-%m-%d")).days if count > 0 else 3
+                (product_id, store_id)
+            )
+            row = cursor.fetchone()
+            if row and row[0]:
+                last_promo_date = datetime.strptime(row[0], "%Y-%m-%d")
+                days_after = (date - last_promo_date).days
+            else:
+                days_after = 3  # safe default: no penalty applied
             penalty = 0.85 + (min(2, days_after) * 0.075)  # Returns to 1.0 after 2 days
             return min(1.0, penalty)
         
@@ -754,14 +755,16 @@ class SalesDataGenerator:
                 new_stock = max(0, current_stock - units_sold)
                 self.current_stocks[(store_id, product_id)] = new_stock
                 
-                # Monday inventory restock
-                if target_date.weekday() == 0:  # Monday
-                    _, _, _, _, _, max_stock = PRODUCTS[product_id]
-                    if product_id in [11, 12, 13, 14, 15, 16]:  # Fresh products: daily restock
+                # Inventory restock logic
+                _, _, _, _, _, max_stock = PRODUCTS[product_id]
+                FRESH_PRODUCTS = [11, 12, 13, 14, 15, 16]  # Pan, Pasteles, Carnes, Frutas, Verduras, Pescado
+                if product_id in FRESH_PRODUCTS:
+                    # Fresh products restock every day
+                    new_stock = max_stock
+                elif target_date.weekday() == 0:  # Monday restock for non-fresh products
+                    if new_stock < max_stock * 0.15:
                         new_stock = max_stock
-                    elif new_stock < max_stock * 0.15:
-                        new_stock = max_stock
-                    self.current_stocks[(store_id, product_id)] = new_stock
+                self.current_stocks[(store_id, product_id)] = new_stock
                 
                 # Price calculation
                 price = get_price(product_id, promo_type if promo_active else None)
