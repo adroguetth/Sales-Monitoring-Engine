@@ -4,6 +4,8 @@ Fixed and Improved Version
 
 This module generates realistic daily sales data for multiple stores and products,
 including seasonal effects, holidays, promotions, stockouts, and AI-powered patterns.
+Data is stored in data/sales/sales_YYYY-MM-DD.db. Master store and product databases
+are stored in data/stores/ and data/products/ respectively.
 """
 
 import os
@@ -12,6 +14,7 @@ import sqlite3
 import calendar
 import logging
 import argparse
+import shutil
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 
@@ -427,6 +430,98 @@ def get_price(product_id: int, promotion_type: Optional[str] = None) -> float:
     return price
 
 # ============================================================================
+# MASTER DATABASE CREATION
+# ============================================================================
+
+def create_master_stores_db(db_path: str = "data/stores/stores_master.db"):
+    """Creates SQLite database with store master data."""
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Create stores table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stores (
+            store_id INTEGER PRIMARY KEY,
+            name TEXT,
+            zone TEXT,
+            ticket_multiplier REAL,
+            promo_sensitivity_bonus REAL,
+            vacation_factor_summer REAL,
+            payday_bonus REAL,
+            winter_factor REAL,
+            cyberday_multiplier REAL
+        )
+    """)
+    
+    # Create location_factors table (one-to-many)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS location_factors (
+            store_id INTEGER,
+            product_id INTEGER,
+            factor REAL,
+            PRIMARY KEY (store_id, product_id),
+            FOREIGN KEY (store_id) REFERENCES stores(store_id)
+        )
+    """)
+    
+    # Insert store data
+    for store_id, info in STORES.items():
+        cursor.execute("""
+            INSERT OR REPLACE INTO stores 
+            (store_id, name, zone, ticket_multiplier, promo_sensitivity_bonus,
+             vacation_factor_summer, payday_bonus, winter_factor, cyberday_multiplier)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            store_id, info["name"], info["zone"], info["ticket_multiplier"],
+            info["promo_sensitivity_bonus"], info.get("vacation_factor_summer", 1.0),
+            info["payday_bonus"], info.get("winter_factor", 1.0),
+            info.get("cyberday_multiplier", 1.0)
+        ))
+        
+        # Insert location factors
+        for prod_id, factor in info.get("location_factors", {}).items():
+            cursor.execute("""
+                INSERT OR REPLACE INTO location_factors (store_id, product_id, factor)
+                VALUES (?, ?, ?)
+            """, (store_id, prod_id, factor))
+    
+    conn.commit()
+    conn.close()
+    logging.info(f"Master stores database created at {db_path}")
+
+def create_master_products_db(db_path: str = "data/products/products_master.db"):
+    """Creates SQLite database with product master data."""
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Create products table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS products (
+            product_id INTEGER PRIMARY KEY,
+            name TEXT,
+            category TEXT,
+            base_demand INTEGER,
+            promo_sensitivity REAL,
+            weekend_sensitivity REAL,
+            max_stock INTEGER
+        )
+    """)
+    
+    # Insert product data
+    for prod_id, (name, category, base_demand, promo_sens, weekend_sens, max_stock) in PRODUCTS.items():
+        cursor.execute("""
+            INSERT OR REPLACE INTO products 
+            (product_id, name, category, base_demand, promo_sensitivity, weekend_sensitivity, max_stock)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (prod_id, name, category, base_demand, promo_sens, weekend_sens, max_stock))
+    
+    conn.commit()
+    conn.close()
+    logging.info(f"Master products database created at {db_path}")
+
+# ============================================================================
 # DEEPSEEK INTELLIGENCE ENGINE
 # ============================================================================
 
@@ -515,7 +610,15 @@ class SalesDataGenerator:
     # Products that are restocked daily (fresh goods)
     FRESH_PRODUCTS = [11, 12, 13, 14, 15, 16]  # Pan, Pasteles, Carnes, Frutas, Verduras, Pescado
 
-    def __init__(self, db_path: str = "sales_monitoring.db", deepseek_api_key: str = None):
+    def __init__(self, db_path: str, deepseek_api_key: str = None):
+        """
+        Initialize generator with target database path.
+        The db_path should include the full path to the sales database file.
+        """
+        self.db_path = db_path
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        
         self.conn = sqlite3.connect(db_path)
         self.stores = list(STORES.keys())
         self.products = PRODUCTS
@@ -581,7 +684,7 @@ class SalesDataGenerator:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_week ON sales_data(year, week_of_year)")
 
         self.conn.commit()
-        logging.info("Database tables verified")
+        logging.info(f"Sales tables verified in {self.db_path}")
 
     def _get_promo_key(self, store_id: int, product_id: int) -> Tuple[int, int]:
         """Returns a stable key for active promotions (store+product only, no month)."""
@@ -872,40 +975,59 @@ class SalesDataGenerator:
 
 def main():
     """
-    Main execution function for GitHub Actions.
+    Main execution function for GitHub Actions or local runs.
     Reads DEEPSEEK_API_KEY from environment variables.
     Generates sales data for yesterday by default.
+    Output database is stored in data/sales/sales_YYYY-MM-DD.db
     """
     parser = argparse.ArgumentParser(description='Sales Monitoring Engine - Intelligent Data Generator')
     parser.add_argument('--date', type=str, help='Target date (YYYY-MM-DD). Defaults to yesterday')
-    parser.add_argument('--db', type=str, default='sales_monitoring.db', help='Database file path')
-
+    parser.add_argument('--db', type=str, default=None, 
+                        help='Database file path. Default: data/sales/sales_YYYY-MM-DD.db')
+    
     args = parser.parse_args()
-
-    # Get DeepSeek API key from environment (GitHub Secrets)
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-
-    if api_key:
-        logging.info("DeepSeek API key found - running in intelligent mode")
-    else:
-        logging.warning("DEEPSEEK_API_KEY not found - running in offline mode")
-
-    generator = SalesDataGenerator(db_path=args.db, deepseek_api_key=api_key)
-
+    
+    # Determine target date
     if args.date:
         target_date = datetime.strptime(args.date, "%Y-%m-%d")
     else:
         target_date = get_yesterday()
         logging.info(f"No date specified, generating for yesterday: {target_date.strftime('%Y-%m-%d')}")
-
+    
+    # Determine database path
+    if args.db:
+        db_path = args.db
+    else:
+        db_path = f"data/sales/sales_{target_date.strftime('%Y-%m-%d')}.db"
+    
+    # Ensure directories exist
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
+    # Create master databases if they don't exist (only once)
+    stores_master_path = "data/stores/stores_master.db"
+    products_master_path = "data/products/products_master.db"
+    if not os.path.exists(stores_master_path):
+        create_master_stores_db(stores_master_path)
+    if not os.path.exists(products_master_path):
+        create_master_products_db(products_master_path)
+    
+    # Get DeepSeek API key from environment (GitHub Secrets)
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    
+    if api_key:
+        logging.info("DeepSeek API key found - running in intelligent mode")
+    else:
+        logging.warning("DEEPSEEK_API_KEY not found - running in offline mode")
+    
+    generator = SalesDataGenerator(db_path=db_path, deepseek_api_key=api_key)
     success = generator.run_daily(target_date)
     generator.close()
-
+    
     if success:
-        logging.info(f"Sales data generation completed for {target_date.strftime('%Y-%m-%d')}")
+        logging.info(f"Sales data generation completed for {target_date.strftime('%Y-%m-%d')} -> {db_path}")
     else:
         logging.error(f"Sales data generation failed for {target_date.strftime('%Y-%m-%d')}")
-
+    
     return 0 if success else 1
 
 if __name__ == "__main__":
