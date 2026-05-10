@@ -27,6 +27,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   generate-sales-data:
     name: Generate Sales Data
@@ -121,20 +124,20 @@ jobs:
             DB_SIZE=$(du -h "$DB_NAME" | cut -f1)
             echo "db_size=$DB_SIZE" >> $GITHUB_OUTPUT
             
-            # Count records
+            # Count records (heredoc avoids YAML indentation causing Python IndentationError)
             python -c "
-            import sqlite3
-            try:
-                conn = sqlite3.connect('$DB_NAME')
-                cursor = conn.cursor()
-                cursor.execute('SELECT COUNT(*) FROM sales_data')
-                count = cursor.fetchone()[0]
-                print(f'record_count={count}')
-                conn.close()
-            except Exception as e:
-                print(f'record_count=0')
-                print(f'Error: {e}')
-            " >> $GITHUB_OUTPUT
+import sqlite3
+try:
+    conn = sqlite3.connect('$DB_NAME')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM sales_data')
+    count = cursor.fetchone()[0]
+    print(f'record_count={count}')
+    conn.close()
+except Exception as e:
+    print(f'record_count=0')
+    print(f'Error: {e}')
+" >> $GITHUB_OUTPUT
           else
             echo "db_size=0" >> $GITHUB_OUTPUT
             echo "record_count=0" >> $GITHUB_OUTPUT
@@ -172,48 +175,49 @@ jobs:
           echo ""
           
           # Display sample data if available
-          if [ -f "$DB_NAME" ] && [ "${{ steps.generate.outputs.record_count }}" -gt 0 ]; then
+          RECORD_COUNT="${{ steps.generate.outputs.record_count }}"
+          if [ -f "$DB_NAME" ] && [ "${RECORD_COUNT:-0}" -gt 0 ]; then
             echo "📊 SAMPLE DATA (last 10 records):"
             echo "----------------------------------------"
             python -c "
-            import sqlite3
-            import pandas as pd
-            conn = sqlite3.connect('$DB_NAME')
-            df = pd.read_sql_query('''
-                SELECT date, store_id, product_id, units_sold, revenue, 
-                       promotion_flag, stockout_flag
-                FROM sales_data 
-                ORDER BY date DESC, store_id, product_id 
-                LIMIT 10
-            ''', conn)
-            print(df.to_string(index=False))
-            conn.close()
-            "
+import sqlite3
+import pandas as pd
+conn = sqlite3.connect('$DB_NAME')
+df = pd.read_sql_query('''
+    SELECT date, store_id, product_id, units_sold, revenue,
+           promotion_flag, stockout_flag
+    FROM sales_data
+    ORDER BY date DESC, store_id, product_id
+    LIMIT 10
+''', conn)
+print(df.to_string(index=False))
+conn.close()
+"
             echo ""
             echo "----------------------------------------"
             echo ""
             echo "📊 SUMMARY BY STORE:"
             python -c "
-            import sqlite3
-            conn = sqlite3.connect('$DB_NAME')
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT store_id, 
-                       COUNT(*) as transactions,
-                       SUM(units_sold) as total_units,
-                       SUM(revenue) as total_revenue,
-                       SUM(CASE WHEN promotion_flag=1 THEN 1 ELSE 0 END) as promos
-                FROM sales_data
-                GROUP BY store_id
-                ORDER BY store_id
-            ''')
-            results = cursor.fetchall()
-            print(f\"{'Store':<6} {'Transactions':<14} {'Total Units':<12} {'Total Revenue':<15} {'Promos':<8}\")
-            print(\"-\" * 60)
-            for row in results:
-                print(f\"{row[0]:<6} {row[1]:<14} {row[2]:<12} {row[3]:<15.2f} {row[4]:<8}\")
-            conn.close()
-            "
+import sqlite3
+conn = sqlite3.connect('$DB_NAME')
+cursor = conn.cursor()
+cursor.execute('''
+    SELECT store_id,
+           COUNT(*) as transactions,
+           SUM(units_sold) as total_units,
+           SUM(revenue) as total_revenue,
+           SUM(CASE WHEN promotion_flag=1 THEN 1 ELSE 0 END) as promos
+    FROM sales_data
+    GROUP BY store_id
+    ORDER BY store_id
+''')
+results = cursor.fetchall()
+print(f\"{'Store':<6} {'Transactions':<14} {'Total Units':<12} {'Total Revenue':<15} {'Promos':<8}\")
+print(\"-\" * 60)
+for row in results:
+    print(f\"{row[0]:<6} {row[1]:<14} {row[2]:<12} {row[3]:<15.2f} {row[4]:<8}\")
+conn.close()
+"
             echo ""
             echo "✅ Artifact available for download: sales-data-${{ github.run_id }}"
           else
