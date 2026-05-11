@@ -1,47 +1,73 @@
+# .github/workflows/event_date_fetcher.yml
+# Production-ready event date fetcher for Chilean e‑commerce dates.
+# Triggers:
+#   - Manual (workflow_dispatch)
+#   - Scheduled every Monday at 08:00 UTC (avoids rate limits, keeps data fresh)
+# Output: data/event_date/event_dated.json committed to the repository.
+
 name: Event Date Fetcher
 
 on:
   workflow_dispatch:
     inputs:
       year:
-        description: 'Target year (e.g., 2026)'
-        required: true
-        default: '2026'
-      force_refresh:
-        description: 'Ignore cache and re‑fetch'
+        description: 'Target year (default: current year)'
         required: false
-        default: false
+        type: string
+      force_refresh:
+        description: 'Ignore cache and re-fetch all events'
+        required: false
         type: boolean
+        default: false
+
+  schedule:
+    # Every Monday at 08:00 UTC – sufficient for events announced weeks in advance
+    - cron: '0 8 * * 1'
 
 permissions:
-  contents: write
+  contents: write   # Required to commit the updated JSON file
 
 jobs:
-  fetch-and-commit:
+  fetch-and-update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # to avoid shallow errors on push
+          fetch-depth: 0   # Full history for safe commit
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - run: pip install requests beautifulsoup4 openai
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 openai
 
-      - name: Run fetcher
+      - name: Run event date fetcher
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
-          python scripts/1_1.event_date_fetcher.py \
-            --year ${{ github.event.inputs.year }} \
-            ${{ github.event.inputs.force_refresh == 'true' && '--force-refresh' || '' }}
+          YEAR="${{ github.event.inputs.year }}"
+          FORCE="${{ github.event.inputs.force_refresh }}"
 
-      - name: Commit and push if changed
+          # If no year provided (manual) or scheduled, use current year
+          if [ -z "$YEAR" ]; then
+            YEAR=$(date +%Y)
+          fi
+
+          CMD="python scripts/1_1.event_date_fetcher.py --year $YEAR"
+          if [ "$FORCE" = "true" ]; then
+            CMD="$CMD --force-refresh"
+          fi
+
+          echo "Executing: $CMD"
+          eval $CMD
+
+      - name: Commit and push updated event dates
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/event_date/event_dated.json
-          git diff --staged --quiet || git commit -m "Update event dates for ${{ github.event.inputs.year }}"
+          git diff --staged --quiet || git commit -m "chore: update event dates for $(date +%Y-%m-%d)"
           git push
