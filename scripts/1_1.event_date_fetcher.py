@@ -1,22 +1,6 @@
 #!/usr/bin/env python3
 """
-event_date_fetcher.py
-
-Event Date Fetcher for key Chilean e-commerce dates with strict validation.
-
-Features:
-- Ignores dates equal to or near current date (avoids publication dates).
-- Strict plausible date ranges per event:
-    * CyberDay:     May 20 – June 15
-    * CyberMonday:  October 1 – October 20
-    * BlackFriday:  November 20 – December 10
-- Contextual check: requires event‑related phrases around the date.
-- Multi‑source consensus: needs at least two independent sources.
-- Source weighting (higher for official sites).
-- DeepSeek web search as arbitrator when consensus is weak.
-- Historical fallback when nothing reliable found.
-
-Output: JSON with event dates, confidence, and metadata.
+event_date_fetcher.py - Final version with aggressive search and DeepSeek web search.
 """
 
 from __future__ import annotations
@@ -79,7 +63,7 @@ DATE_RANGE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Expected plausible date ranges per event (inclusive)
+# Expected plausible date ranges per event (used for validation, NOT as fallback)
 EVENT_PLAUSIBLE_RANGE = {
     "CyberDay":     (5, 20, 6, 15),   # May 20 – June 15
     "CyberMonday":  (10, 1, 10, 20),  # October 1 – October 20
@@ -99,15 +83,14 @@ SOURCE_WEIGHTS = {
     "DF.cl": 5,
     "BioBioChile": 5,
     "google_snippet": 3,
-    "llm_web_search": 7,
+    "deepseek_web_search": 8,
     "historical_estimation": 1,
 }
 
-# Minimum required weight and distinct sources for high confidence
 MIN_WEIGHT_HIGH = 12
 MIN_SOURCES_HIGH = 2
 
-# Context keywords that suggest a date is the event date (not publication date)
+# Context keywords
 CONTEXT_KEYWORDS = [
     "se realizará", "las fechas son", "del", "al", "entre el", "y el",
     "próximo cyberday", "fecha oficial", "anunció", "será el", "comienza",
@@ -119,11 +102,9 @@ CONTEXT_KEYWORDS = [
 # ---------------------------------------------------------------------------
 
 def today() -> datetime:
-    """Return current date without time (UTC naive)."""
     return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
 def is_plausible(event: str, date: datetime) -> bool:
-    """Return True if date falls within the plausible range for the event."""
     if event not in EVENT_PLAUSIBLE_RANGE:
         return True
     sm, sd, em, ed = EVENT_PLAUSIBLE_RANGE[event]
@@ -132,25 +113,17 @@ def is_plausible(event: str, date: datetime) -> bool:
     return start_ok <= date <= end_ok
 
 def is_too_close_to_today(date: datetime, days_threshold: int = 2) -> bool:
-    """Ignore dates that are today or within the next few days (publication dates)."""
     diff = (date - today()).days
     return 0 <= diff <= days_threshold
 
 def has_event_context(text: str, event: str) -> bool:
-    """Check if the text contains typical event announcement phrases."""
     text_lower = text.lower()
     event_lower = event.lower()
-    # Must contain the event name
     if event_lower not in text_lower:
         return False
-    # Must contain at least one context keyword
     return any(kw in text_lower for kw in CONTEXT_KEYWORDS)
 
 def parse_date_range(text: str, year: int, event: str) -> Optional[Tuple[datetime, datetime]]:
-    """
-    Extract date range from text, then validate plausibility and context.
-    Returns (start, end) or None.
-    """
     for match in DATE_RANGE_RE.finditer(text.lower()):
         try:
             day1 = int(match.group(1))
@@ -160,39 +133,22 @@ def parse_date_range(text: str, year: int, event: str) -> Optional[Tuple[datetim
             end = datetime(year, month, day2)
             if end < start:
                 end = start + timedelta(days=2)
-            # Validation chain
             if not is_plausible(event, start):
                 logger.debug(f"Date {start.date()} not in plausible range for {event}")
                 continue
             if is_too_close_to_today(start):
-                logger.debug(f"Date {start.date()} is too close to today (publication date)")
+                logger.debug(f"Date {start.date()} too close to today (publication date)")
                 continue
             if not has_event_context(text, event):
-                logger.debug(f"Missing event context for {event} in text snippet")
+                logger.debug(f"Missing event context for {event} in snippet")
                 continue
             return start, end
         except (ValueError, KeyError):
             continue
     return None
 
-def normalize_date_str(date_str: str) -> str:
-    """Convert various date formats to YYYY-MM-DD."""
-    if re.match(r"\d{4}-\d{2}-\d{2}", date_str):
-        return date_str
-    for sep in ["-", "/"]:
-        parts = date_str.split(sep)
-        if len(parts) == 3 and len(parts[0]) <= 2:
-            return f"{parts[2]}-{parts[1].zfill(2)}-{parts[0].zfill(2)}"
-    for fmt in ["%d-%m-%Y", "%d/%m/%Y", "%Y%m%d"]:
-        try:
-            dt = datetime.strptime(date_str, fmt)
-            return dt.strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return date_str
-
 # ---------------------------------------------------------------------------
-# Session handling
+# Session
 # ---------------------------------------------------------------------------
 def build_session() -> requests.Session:
     session = requests.Session()
@@ -232,9 +188,8 @@ def safe_get(url: str) -> Optional[requests.Response]:
         return None
 
 # ---------------------------------------------------------------------------
-# Scrapers (each returns list of (start, end, source) – already validated)
+# Scrapers (same as before, but using parse_date_range with validation)
 # ---------------------------------------------------------------------------
-
 def scrape_cyber_cl(event: str, year: int) -> List[Tuple[datetime, datetime, str]]:
     url = "https://cyber.cl"
     logger.info(f"Scraping {url}")
@@ -244,14 +199,12 @@ def scrape_cyber_cl(event: str, year: int) -> List[Tuple[datetime, datetime, str
     time.sleep(POLITE_DELAY)
     soup = BeautifulSoup(resp.text, "html.parser")
     candidates = []
-    # Look in event-specific elements
     for selector in [".event-date", ".countdown", ".fecha", "time", "[class*='date']"]:
         for el in soup.select(selector):
             text = el.get_text(" ", strip=True)
             parsed = parse_date_range(text, year, event)
             if parsed:
                 candidates.append((parsed[0], parsed[1], "cyber.cl"))
-    # Search near event keyword
     keyword = "cyberday" if "day" in event.lower() else "cybermonday"
     full_text = soup.get_text(" ", strip=True)
     idx = full_text.lower().find(keyword)
@@ -301,7 +254,6 @@ def scrape_media(event: str, year: int) -> List[Tuple[datetime, datetime, str]]:
         ("DF.cl", "https://www.df.cl/buscador?q={q}"),
         ("BioBioChile", "https://www.biobiochile.cl/?s={q}"),
     ]
-    # Use more specific queries
     query_map = {
         "CyberDay": f"CyberDay {year} fecha oficial",
         "CyberMonday": f"CyberMonday {year} fecha",
@@ -316,7 +268,6 @@ def scrape_media(event: str, year: int) -> List[Tuple[datetime, datetime, str]]:
             continue
         time.sleep(POLITE_DELAY)
         soup = BeautifulSoup(resp.text, "html.parser")
-        # Search in result snippets
         for snippet in soup.select(".resultado, .search-result, article, .noticia, .card"):
             text = snippet.get_text(" ", strip=True)
             if text and (str(year) in text or event.lower() in text.lower()):
@@ -347,15 +298,14 @@ def scrape_google_snippet(event: str, year: int) -> List[Tuple[datetime, datetim
     return candidates
 
 # ---------------------------------------------------------------------------
-# Weighted candidate aggregation
+# Weighted aggregator
 # ---------------------------------------------------------------------------
-
 class WeightedDateAggregator:
     def __init__(self, event: str):
         self.event = event
         self.candidates: List[Tuple[datetime, datetime, str]] = []
-        self.votes = defaultdict(int)               # (start_str, end_str) -> total weight
-        self.source_count = defaultdict(set)        # (start_str, end_str) -> set of sources
+        self.votes = defaultdict(int)
+        self.source_count = defaultdict(set)
 
     def add_candidates(self, candidates: List[Tuple[datetime, datetime, str]]):
         for start, end, source in candidates:
@@ -366,15 +316,14 @@ class WeightedDateAggregator:
             self.candidates.append((start, end, source))
 
     def best_candidate(self) -> Optional[Tuple[datetime, datetime, str, int, int]]:
-        """Return (start, end, source, total_weight, sources_count) of best candidate."""
         best_key = None
         best_weight = 0
         best_sources = 0
         for key, weight in self.votes.items():
-            sources_cnt = len(self.source_count[key])
-            if weight > best_weight or (weight == best_weight and sources_cnt > best_sources):
+            src_cnt = len(self.source_count[key])
+            if weight > best_weight or (weight == best_weight and src_cnt > best_sources):
                 best_weight = weight
-                best_sources = sources_cnt
+                best_sources = src_cnt
                 best_key = key
         if not best_key:
             return None
@@ -384,104 +333,91 @@ class WeightedDateAggregator:
         return None
 
 # ---------------------------------------------------------------------------
-# DeepSeek arbitration (only when consensus is weak)
+# DeepSeek web search (must return concrete dates, not ranges)
 # ---------------------------------------------------------------------------
-
-def deepseek_resolve(event: str, year: int, aggregator: WeightedDateAggregator,
-                     api_key: str, base_url: str = "https://api.deepseek.com",
-                     model: str = "deepseek-chat") -> Optional[Dict]:
-    """Use DeepSeek with web search to find the most reliable date."""
+def deepseek_fetch(event: str, year: int, api_key: str,
+                   base_url: str = "https://api.deepseek.com",
+                   model: str = "deepseek-chat") -> Optional[Dict]:
     client = OpenAI(api_key=api_key, base_url=base_url)
 
-    # Build candidate summary
-    candidate_lines = []
-    for (start_str, end_str), weight in aggregator.votes.items():
-        sources = ", ".join(aggregator.source_count[(start_str, end_str)])
-        candidate_lines.append(f"  - {start_str} to {end_str} (weight {weight}, sources: {sources})")
-    candidates_text = "\n".join(candidate_lines) if candidate_lines else "No candidates found."
-
     prompt = f"""
-You are an expert in Chilean e-commerce dates.
+You are an expert in Chilean e-commerce. Find the official dates for {event} {year} in Chile.
 
-Event: {event} {year}
-Expected plausible period: {EVENT_PLAUSIBLE_RANGE[event][1]}/{EVENT_PLAUSIBLE_RANGE[event][0]} – {EVENT_PLAUSIBLE_RANGE[event][3]}/{EVENT_PLAUSIBLE_RANGE[event][2]}
+Current date: {today().strftime('%Y-%m-%d')}
 
-Candidates found (already validated against plausible range and not publication dates):
-{candidates_text}
+Rules:
+- The event dates are NEVER the current day or within 2 days of current date.
+- CyberDay usually occurs in late May or early June. The plausible window is May 20 – June 15.
+- DO NOT return the whole plausible window as answer.
+- Use web search to find news articles, official announcements, or reliable media (El Mostrador, Meganoticias, T13, ADN, etc.).
+- Return ONLY concrete start and end dates in JSON format.
 
-Task:
-- If at least two independent sources agree on the same date range with total weight ≥ {MIN_WEIGHT_HIGH}, select it.
-- Otherwise, perform a web search (priority: cyber.cl, ccs.cl) to find the official announced date.
-- The event is never the current day or within 2 days of current date.
-- Return ONLY JSON with the following structure:
+Example correct output for CyberDay 2026:
 {{
-  "event": "{event}",
-  "year": {year},
-  "start_date": "YYYY-MM-DD",
-  "end_date": "YYYY-MM-DD",
-  "duration_days": integer,
-  "source": "deepseek_arbitration",
-  "confidence": "high|medium|low",
-  "notes": "explanation"
+  "event": "CyberDay",
+  "year": 2026,
+  "start_date": "2026-06-01",
+  "end_date": "2026-06-03",
+  "duration_days": 3,
+  "source": "deepseek_web_search",
+  "confidence": "medium",
+  "notes": "Reported by multiple media outlets (El Mostrador, Meganoticias) based on Cannon Home leak."
 }}
+
+Now search for {event} {year} and return ONLY the JSON.
 """
     try:
+        # Use the correct method for web search (depends on SDK version)
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "You are a helpful assistant for Chilean e-commerce dates. Return only valid JSON."},
+                {"role": "system", "content": "You are a helpful assistant for Chilean e-commerce dates. Return only valid JSON with concrete dates."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.2,
+            temperature=0.1,
+            # Enable web search (may need to adapt to your SDK)
             extra_body={"enable_search": True}
         )
         raw = response.choices[0].message.content.strip()
         raw = re.sub(r"^```json|```$", "", raw, flags=re.IGNORECASE).strip()
         result = json.loads(raw)
+        # Validate returned dates
         if result.get("start_date"):
-            # Final validation
-            try:
-                d = datetime.strptime(result["start_date"], "%Y-%m-%d")
-                if is_too_close_to_today(d):
-                    logger.warning("DeepSeek returned a date too close to today, discarding.")
-                    return None
-                if not is_plausible(event, d):
-                    logger.warning("DeepSeek returned implausible date, discarding.")
-                    return None
-            except:
-                pass
+            s = datetime.strptime(result["start_date"], "%Y-%m-%d")
+            if not is_plausible(event, s):
+                logger.warning(f"DeepSeek returned implausible date: {s.date()}")
+                return None
+            if is_too_close_to_today(s):
+                logger.warning("DeepSeek returned date too close to today")
+                return None
             return result
     except Exception as e:
-        logger.error(f"DeepSeek arbitration failed: {e}")
+        logger.error(f"DeepSeek web search failed: {e}")
     return None
 
 # ---------------------------------------------------------------------------
-# Historical fallback (last resort)
+# Historical fallback (concrete dates)
 # ---------------------------------------------------------------------------
-
 def estimate_historically(event: str, year: int) -> Dict:
-    """Fallback estimation using historical patterns."""
     if event == "CyberDay":
         # Last Monday of May
         may_31 = datetime(year, 5, 31)
         offset = (may_31.weekday() - 0) % 7
         start = may_31 - timedelta(days=offset)
-        end = start + timedelta(days=2)   # 3 days (Mon-Wed)
-        notes = "Estimated: last Monday of May, duration 3 days (historical pattern)."
+        end = start + timedelta(days=2)
+        notes = "Historical estimation: last Monday of May, 3 days (expected late May/early June)."
     elif event == "CyberMonday":
-        # Second Monday of October
         oct_1 = datetime(year, 10, 1)
         to_mon = (7 - oct_1.weekday()) % 7
         start = oct_1 + timedelta(days=to_mon + 7)
         end = start + timedelta(days=2)
-        notes = "Estimated: second Monday of October, duration 3 days."
+        notes = "Historical estimation: second Monday of October."
     elif event == "BlackFriday":
-        # Last Friday of November
         nov_30 = datetime(year, 11, 30)
         offset = (nov_30.weekday() - 4) % 7
         start = nov_30 - timedelta(days=offset)
-        end = start + timedelta(days=3)   # Fri-Mon
-        notes = "Estimated: last Friday of November, duration 4 days."
+        end = start + timedelta(days=3)
+        notes = "Historical estimation: last Friday of November, 4 days."
     else:
         raise ValueError(f"Unknown event {event}")
     return {
@@ -498,43 +434,39 @@ def estimate_historically(event: str, year: int) -> Dict:
 # ---------------------------------------------------------------------------
 # Main fetcher
 # ---------------------------------------------------------------------------
-
 def fetch_event(event: str, year: int, api_key: Optional[str] = None,
                 force_refresh: bool = False, llm_base_url: str = "https://api.deepseek.com",
                 llm_model: str = "deepseek-chat") -> Dict:
 
-    # 1. Check cache
+    # Cache
     cache_path = Path(DEFAULT_OUTPUT)
     if not force_refresh and cache_path.exists():
         try:
             data = json.loads(cache_path.read_text(encoding="utf-8"))
             if data.get("year") == year and event in data.get("events", {}):
                 cached = data["events"][event]
-                # Validate cached date
                 d = datetime.strptime(cached["start_date"], "%Y-%m-%d")
                 if is_plausible(event, d) and not is_too_close_to_today(d):
-                    logger.info(f"Using cached date for {event}: {cached['start_date']}")
+                    logger.info(f"Using cached: {cached['start_date']}")
                     return cached
         except Exception:
             pass
 
-    # 2. Scrape all sources
+    # Scrape
     aggregator = WeightedDateAggregator(event)
-    scrapers = [scrape_cyber_cl, scrape_ccs, scrape_media, scrape_google_snippet]
-    for scraper in scrapers:
+    for scraper in [scrape_cyber_cl, scrape_ccs, scrape_media, scrape_google_snippet]:
         try:
             candidates = scraper(event, year)
             if candidates:
                 aggregator.add_candidates(candidates)
-                logger.debug(f"{scraper.__name__} found {len(candidates)} candidate(s)")
         except Exception as e:
-            logger.warning(f"Scraper {scraper.__name__} failed: {e}")
+            logger.warning(f"Scraper error: {e}")
 
+    # High confidence?
     best = aggregator.best_candidate()
     if best:
-        start, end, source, weight, sources_cnt = best
-        if weight >= MIN_WEIGHT_HIGH and sources_cnt >= MIN_SOURCES_HIGH:
-            logger.info(f"High confidence for {event}: {start.date()} (weight {weight}, sources {sources_cnt})")
+        start, end, source, weight, sources = best
+        if weight >= MIN_WEIGHT_HIGH and sources >= MIN_SOURCES_HIGH:
             return {
                 "event": event,
                 "year": year,
@@ -543,16 +475,16 @@ def fetch_event(event: str, year: int, api_key: Optional[str] = None,
                 "duration_days": (end - start).days + 1,
                 "source": source,
                 "confidence": "high",
-                "notes": f"Weight {weight} from {sources_cnt} sources.",
+                "notes": f"Weight {weight} from {sources} sources.",
             }
 
-    # 3. Use DeepSeek if available
+    # DeepSeek web search
     if api_key:
-        result = deepseek_resolve(event, year, aggregator, api_key, llm_base_url, llm_model)
+        result = deepseek_fetch(event, year, api_key, llm_base_url, llm_model)
         if result:
             return result
 
-    # 4. Fallback to historical
+    # Fallback
     logger.warning(f"No reliable data for {event}, using historical fallback.")
     return estimate_historically(event, year)
 
@@ -565,11 +497,7 @@ def fetch_all_events(year: int, api_key: Optional[str] = None,
         logger.info(f"Processing {event} {year}")
         events[event] = fetch_event(event, year, api_key, force_refresh, llm_base_url, llm_model)
 
-    output = {
-        "year": year,
-        "fetched_at": datetime.now().isoformat(),
-        "events": events,
-    }
+    output = {"year": year, "fetched_at": datetime.now().isoformat(), "events": events}
     Path(output_file).write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info(f"Saved to {output_file}")
     return events
@@ -577,22 +505,21 @@ def fetch_all_events(year: int, api_key: Optional[str] = None,
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-
 def main():
-    parser = argparse.ArgumentParser(description="Robust event date fetcher for Chilean e-commerce.")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, default=datetime.now().year)
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
-    parser.add_argument("--deepseek-key", help="API key for DeepSeek (also reads DEEPSEEK_API_KEY env)")
+    parser.add_argument("--deepseek-key", help="DeepSeek API key (or env DEEPSEEK_API_KEY)")
     parser.add_argument("--llm-base-url", default="https://api.deepseek.com")
     parser.add_argument("--llm-model", default="deepseek-chat")
     parser.add_argument("--force-refresh", action="store_true")
-    parser.add_argument("--log-level", default="INFO", choices=["DEBUG","INFO","WARNING","ERROR"])
+    parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
     logging.getLogger().setLevel(args.log_level)
     api_key = args.deepseek_key or os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
-        logger.info("No DeepSeek key provided – will use scraping + historical only.")
+        logger.info("No DeepSeek key – scraping + historical only.")
     fetch_all_events(args.year, api_key, args.output, args.force_refresh,
                      args.llm_base_url, args.llm_model)
 
