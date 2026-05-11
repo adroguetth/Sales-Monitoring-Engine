@@ -1,8 +1,8 @@
 # .github/workflows/test_event_fetcher.yml
-# Manual workflow to test 1_1.event_date_fetcher.py
+# Manual workflow to test event_date_fetcher.py with weighted multi-source scraping
 # Trigger: workflow_dispatch only (no cron)
 
-name: 1_1. Test Event Date Fetcher
+name: Test Event Date Fetcher
 
 on:
   workflow_dispatch:
@@ -17,16 +17,21 @@ on:
         required: false
         default: 'event_dates.json'
         type: string
-      use_deepseek:
-        description: 'Use DeepSeek API (requires secret)'
-        required: false
-        default: false
-        type: boolean
       force_refresh:
-        description: 'Ignore cache and re‑scrape all sources'
+        description: 'Ignore cache and re-scrape all sources'
         required: false
         default: false
         type: boolean
+      log_level:
+        description: 'Logging level'
+        required: false
+        default: 'INFO'
+        type: choice
+        options:
+          - DEBUG
+          - INFO
+          - WARNING
+          - ERROR
 
 permissions:
   contents: read
@@ -48,7 +53,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 openai
+          pip install requests beautifulsoup4 openai urllib3
 
       - name: Run event date fetcher
         env:
@@ -58,32 +63,66 @@ jobs:
           YEAR="${{ github.event.inputs.year }}"
           OUTPUT="${{ github.event.inputs.output_file }}"
           FORCE="${{ github.event.inputs.force_refresh }}"
-          USE_DS="${{ github.event.inputs.use_deepseek }}"
+          LOG_LEVEL="${{ github.event.inputs.log_level }}"
 
           if [ ! -f "$SCRIPT" ]; then
             echo "❌ Script not found: $SCRIPT"
+            echo "Current directory structure:"
+            ls -la
+            ls -la scripts/ 2>/dev/null || echo "scripts/ directory not found"
             exit 1
           fi
 
-          CMD="python $SCRIPT --year $YEAR --output $OUTPUT"
+          echo "============================================"
+          echo "Event Date Fetcher - Smart Weighted Scraping"
+          echo "============================================"
+          echo "Year: $YEAR"
+          echo "Output: $OUTPUT"
+          echo "Force refresh: $FORCE"
+          echo "Log level: $LOG_LEVEL"
+          echo "DeepSeek API: ${{ secrets.DEEPSEEK_API_KEY != '' && 'configured' || 'not configured' }}"
+          echo "============================================"
+
+          CMD="python $SCRIPT --year $YEAR --output $OUTPUT --log-level $LOG_LEVEL"
+
           if [ "$FORCE" = "true" ]; then
             CMD="$CMD --force-refresh"
           fi
-          if [ "$USE_DS" = "true" ] && [ -n "$DEEPSEEK_API_KEY" ]; then
-            echo "✅ Using DeepSeek API (web search enabled)"
+
+          if [ -n "$DEEPSEEK_API_KEY" ]; then
+            echo "✅ DeepSeek API key found - arbitration mode enabled"
             CMD="$CMD --deepseek-key $DEEPSEEK_API_KEY"
-          elif [ "$USE_DS" = "true" ]; then
-            echo "⚠️ DeepSeek requested but no API key found. Falling back to scraping + historical."
           else
-            echo "ℹ️ DeepSeek disabled. Using scraping + historical only."
+            echo "⚠️ No DeepSeek API key - using scraping + historical only"
           fi
 
           echo "Executing: $CMD"
           eval $CMD
+
+          # Verify output file
+          if [ -f "$OUTPUT" ]; then
+            echo "✅ Output file created: $OUTPUT"
+            echo "File size: $(du -h $OUTPUT | cut -f1)"
+          else
+            echo "❌ Output file not created"
+            exit 1
+          fi
+
+      - name: Display results
+        run: |
+          OUTPUT="${{ github.event.inputs.output_file }}"
+          echo "============================================"
+          echo "EXTRACTED EVENT DATES"
+          echo "============================================"
+          if [ -f "$OUTPUT" ]; then
+            cat "$OUTPUT" | python -m json.tool
+          else
+            echo "No output file found"
+          fi
 
       - name: Upload JSON artifact
         uses: actions/upload-artifact@v4
         with:
           name: event-dates-${{ github.run_id }}
           path: ${{ github.event.inputs.output_file }}
-          retention-days: 7
+          retention-days: 30
