@@ -2,7 +2,7 @@
 # Manual workflow to fetch Chilean e‑commerce event dates (CyberDay, CyberMonday, BlackFriday)
 # Uses intelligent nearest‑event logic and local cache to avoid redundant API calls.
 
-name: Event Date Fetcher
+name: 1_1. Event Date Fetcher
 
 on:
   workflow_dispatch:
