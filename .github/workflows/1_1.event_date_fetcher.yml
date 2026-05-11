@@ -1,0 +1,89 @@
+# .github/workflows/test_event_fetcher.yml
+# Manual workflow to test 1_1.event_date_fetcher.py
+# Trigger: workflow_dispatch only (no cron)
+
+name: Test Event Date Fetcher
+
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Target year (e.g., 2026)'
+        required: true
+        default: '2026'
+        type: string
+      output_file:
+        description: 'Output JSON filename'
+        required: false
+        default: 'event_dates.json'
+        type: string
+      use_deepseek:
+        description: 'Use DeepSeek API (requires secret)'
+        required: false
+        default: false
+        type: boolean
+      force_refresh:
+        description: 'Ignore cache and re‑scrape all sources'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  test-fetcher:
+    name: Run Event Date Fetcher
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 openai
+
+      - name: Run event date fetcher
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          SCRIPT="scripts/1_1.event_date_fetcher.py"
+          YEAR="${{ github.event.inputs.year }}"
+          OUTPUT="${{ github.event.inputs.output_file }}"
+          FORCE="${{ github.event.inputs.force_refresh }}"
+          USE_DS="${{ github.event.inputs.use_deepseek }}"
+
+          if [ ! -f "$SCRIPT" ]; then
+            echo "❌ Script not found: $SCRIPT"
+            exit 1
+          fi
+
+          CMD="python $SCRIPT --year $YEAR --output $OUTPUT"
+          if [ "$FORCE" = "true" ]; then
+            CMD="$CMD --force-refresh"
+          fi
+          if [ "$USE_DS" = "true" ] && [ -n "$DEEPSEEK_API_KEY" ]; then
+            echo "✅ Using DeepSeek API (web search enabled)"
+            CMD="$CMD --deepseek-key $DEEPSEEK_API_KEY"
+          elif [ "$USE_DS" = "true" ]; then
+            echo "⚠️ DeepSeek requested but no API key found. Falling back to scraping + historical."
+          else
+            echo "ℹ️ DeepSeek disabled. Using scraping + historical only."
+          fi
+
+          echo "Executing: $CMD"
+          eval $CMD
+
+      - name: Upload JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: event-dates-${{ github.run_id }}
+          path: ${{ github.event.inputs.output_file }}
+          retention-days: 7
