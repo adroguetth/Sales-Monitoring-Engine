@@ -1,12 +1,11 @@
 # .github/workflows/sales_generator.yml
-# Daily sales data generation using 1_2.sales_generator.py
+# Daily sales data generation with output in data/sales/
 
 name: Sales Data Generator
 
 on:
   schedule:
-    # Run daily at 06:00 UTC (adjust as needed)
-    - cron: '0 6 * * *'
+    - cron: '0 6 * * *'   # Daily at 06:00 UTC
   workflow_dispatch:
     inputs:
       target_date:
@@ -21,7 +20,7 @@ on:
         default: 'sales_monitoring.db'
 
 permissions:
-  contents: read  # No need to write to repo; only read
+  contents: read
 
 jobs:
   generate-sales:
@@ -36,9 +35,10 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas numpy openai
+        run: pip install pandas numpy openai
+
+      - name: Create data/sales directory
+        run: mkdir -p data/sales
 
       - name: Run sales generator
         env:
@@ -46,22 +46,22 @@ jobs:
         run: |
           TARGET_DATE="${{ github.event.inputs.target_date }}"
           DB_NAME="${{ github.event.inputs.db_name }}"
+          DB_PATH="data/sales/${DB_NAME}"
 
-          # Build command
-          CMD="python scripts/1_2.sales_generator.py"
+          CMD="python scripts/1_2.sales_generator.py --db $DB_PATH"
           if [ -n "$TARGET_DATE" ]; then
             CMD="$CMD --date $TARGET_DATE"
-          fi
-          if [ -n "$DB_NAME" ]; then
-            CMD="$CMD --db $DB_NAME"
           fi
 
           echo "Executing: $CMD"
           eval $CMD
 
+      - name: List generated files
+        run: ls -la data/sales/
+
       - name: Upload database artifact
         uses: actions/upload-artifact@v4
         with:
           name: sales-data-${{ github.run_id }}
-          path: ${{ github.event.inputs.db_name || 'sales_monitoring.db' }}
-          retention-days: 7
+          path: data/sales/${{ github.event.inputs.db_name || 'sales_monitoring.db' }}
+          retention-days: 30   # longer retention for historical data
