@@ -1,36 +1,39 @@
-name: Manual Sales Data Generator (Test)
+# .github/workflows/sales_generator.yml
+# Daily sales data generation using 1_2.sales_generator.py
+
+name: Sales Data Generator
 
 on:
+  schedule:
+    # Run daily at 06:00 UTC (adjust as needed)
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       target_date:
-        description: 'Fecha objetivo (YYYY-MM-DD) - Dejar vacío para usar ayer'
+        description: 'Target date (YYYY-MM-DD). Leave empty for yesterday.'
         required: false
         type: string
         default: ''
-      commit_message:
-        description: 'Mensaje de commit personalizado (opcional)'
+      db_name:
+        description: 'Output database file name'
         required: false
         type: string
-        default: ''
+        default: 'sales_monitoring.db'
+
+permissions:
+  contents: read  # No need to write to repo; only read
 
 jobs:
-  generate-and-commit:
+  generate-sales:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
@@ -41,35 +44,24 @@ jobs:
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
-          if [ -z "${{ github.event.inputs.target_date }}" ]; then
-            python scripts/1_sales_generator.py
-          else
-            python scripts/1_sales_generator.py --date ${{ github.event.inputs.target_date }}
+          TARGET_DATE="${{ github.event.inputs.target_date }}"
+          DB_NAME="${{ github.event.inputs.db_name }}"
+
+          # Build command
+          CMD="python scripts/1_2.sales_generator.py"
+          if [ -n "$TARGET_DATE" ]; then
+            CMD="$CMD --date $TARGET_DATE"
+          fi
+          if [ -n "$DB_NAME" ]; then
+            CMD="$CMD --db $DB_NAME"
           fi
 
-      - name: Commit and push generated databases
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Add all database files (sales, stores, products)
-          git add data/sales/*.db data/stores/*.db data/products/*.db || true
-          
-          if git diff --staged --quiet; then
-            echo "No new database files to commit."
-          else
-            if [ -n "${{ github.event.inputs.commit_message }}" ]; then
-              COMMIT_MSG="${{ github.event.inputs.commit_message }}"
-            else
-              LATEST_DB=$(ls -t data/sales/*.db 2>/dev/null | head -1)
-              if [ -n "$LATEST_DB" ]; then
-                DB_DATE=$(basename "$LATEST_DB" | sed 's/sales_\(.*\)\.db/\1/')
-                COMMIT_MSG="Add sales data for $DB_DATE"
-              else
-                COMMIT_MSG="Update sales databases"
-              fi
-            fi
-            git commit -m "$COMMIT_MSG"
-            git push
-            echo "Committed and pushed successfully."
-          fi
+          echo "Executing: $CMD"
+          eval $CMD
+
+      - name: Upload database artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sales-data-${{ github.run_id }}
+          path: ${{ github.event.inputs.db_name || 'sales_monitoring.db' }}
+          retention-days: 7
