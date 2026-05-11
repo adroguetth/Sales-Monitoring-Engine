@@ -1,0 +1,36 @@
+{
+  "year": 2026,
+  "fetched_at": "2026-05-11T19:41:51.134027",
+  "events": {
+    "CyberDay": {
+      "event": "CyberDay",
+      "year": 2026,
+      "start_date": "2026-06-01",
+      "end_date": "2026-06-03",
+      "duration_days": 3,
+      "source": "deepseek_web_search",
+      "confidence": "medium",
+      "notes": "Based on media reports (El Mostrador, Meganoticias)."
+    },
+    "CyberMonday": {
+      "event": "CyberMonday",
+      "year": 2026,
+      "start_date": "2026-10-12",
+      "end_date": "2026-10-14",
+      "duration_days": 3,
+      "source": "historical_estimation",
+      "confidence": "low",
+      "notes": "Historical estimation: second Monday of October, 3 days."
+    },
+    "BlackFriday": {
+      "event": "BlackFriday",
+      "year": 2026,
+      "start_date": "2026-11-27",
+      "end_date": "2026-11-30",
+      "duration_days": 4,
+      "source": "historical_estimation",
+      "confidence": "low",
+      "notes": "Historical estimation: last Friday of November, 4 days."
+    }
+  }
+}
