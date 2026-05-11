@@ -1,8 +1,5 @@
 # .github/workflows/event_date_fetcher.yml
-# Manual workflow to fetch Chilean e‑commerce event dates (CyberDay, CyberMonday, BlackFriday)
-# Uses intelligent nearest‑event logic and local cache to avoid redundant API calls.
-
-name: 1_1. Event Date Fetcher
+name: Event Date Fetcher
 
 on:
   workflow_dispatch:
@@ -18,49 +15,26 @@ on:
         default: false
         type: boolean
 
-permissions:
-  contents: read
-
 jobs:
   fetch-dates:
-    name: Fetch Event Dates
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 openai
-
-      - name: Run event date fetcher
+        run: pip install requests beautifulsoup4 openai
+      - name: Run fetcher
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
-          YEAR="${{ github.event.inputs.year }}"
-          FORCE="${{ github.event.inputs.force_refresh }}"
-
-          # Build command
-          CMD="python scripts/1_1.event_date_fetcher.py --year $YEAR"
-
-          if [ "$FORCE" = "true" ]; then
-            CMD="$CMD --force-refresh"
-          fi
-
-          echo "Executing: $CMD"
-          eval $CMD
-
-      - name: Upload event dates artifact
+          python scripts/1_1.event_date_fetcher.py \
+            --year ${{ github.event.inputs.year }} \
+            ${{ github.event.inputs.force_refresh == 'true' && '--force-refresh' || '' }}
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: event-dates-${{ github.run_id }}
           path: data/event_date/event_dates.json
           retention-days: 7
-          if-no-files-found: error
