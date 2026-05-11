@@ -2,7 +2,7 @@
 # Manual workflow to test 1_1.event_date_fetcher.py
 # Trigger: workflow_dispatch only (no cron)
 
-name: Test Event Date Fetcher
+name: 1_1. Test Event Date Fetcher
 
 on:
   workflow_dispatch:
