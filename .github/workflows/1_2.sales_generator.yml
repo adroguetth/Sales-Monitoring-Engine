@@ -1,67 +1,63 @@
-# .github/workflows/sales_generator.yml
-# Daily sales data generation with output in data/sales/
-
 name: Sales Data Generator
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # Daily at 06:00 UTC
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       target_date:
-        description: 'Target date (YYYY-MM-DD). Leave empty for yesterday.'
+        description: 'Target date (YYYY-MM-DD)'
         required: false
         type: string
-        default: ''
-      db_name:
-        description: 'Output database file name'
+      force_refresh:
+        description: 'Force re-run even if DB exists'
         required: false
-        type: string
-        default: 'sales_monitoring.db'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
-  generate-sales:
+  generate:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - run: pip install pandas numpy openai
 
-      - name: Install dependencies
-        run: pip install pandas numpy openai
-
-      - name: Create data/sales directory
-        run: mkdir -p data/sales
+      - name: Determine target date
+        id: date
+        run: |
+          if [ -n "${{ github.event.inputs.target_date }}" ]; then
+            TARGET_DATE="${{ github.event.inputs.target_date }}"
+          else
+            TARGET_DATE=$(date -d 'yesterday' +%Y-%m-%d)
+          fi
+          echo "target_date=$TARGET_DATE" >> $GITHUB_OUTPUT
+          echo "db_file=data/sales/${TARGET_DATE}.db" >> $GITHUB_OUTPUT
+          mkdir -p data/sales
 
       - name: Run sales generator
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
-          TARGET_DATE="${{ github.event.inputs.target_date }}"
-          DB_NAME="${{ github.event.inputs.db_name }}"
-          DB_PATH="data/sales/${DB_NAME}"
+          python scripts/1_2.sales_generator.py \
+            --date ${{ steps.date.outputs.target_date }} \
+            --db ${{ steps.date.outputs.db_file }}
 
-          CMD="python scripts/1_2.sales_generator.py --db $DB_PATH"
-          if [ -n "$TARGET_DATE" ]; then
-            CMD="$CMD --date $TARGET_DATE"
-          fi
+      - name: Verify database content
+        run: |
+          echo "Database file: ${{ steps.date.outputs.db_file }}"
+          ls -la ${{ steps.date.outputs.db_file }}
+          echo "Record count:"
+          sqlite3 ${{ steps.date.outputs.db_file }} "SELECT COUNT(*) FROM sales_data;" || echo "Table not found or empty"
 
-          echo "Executing: $CMD"
-          eval $CMD
-
-      - name: List generated files
-        run: ls -la data/sales/
-
-      - name: Upload database artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: sales-data-${{ github.run_id }}
-          path: data/sales/${{ github.event.inputs.db_name || 'sales_monitoring.db' }}
-          retention-days: 30   # longer retention for historical data
+          path: ${{ steps.date.outputs.db_file }}
+          retention-days: 30
