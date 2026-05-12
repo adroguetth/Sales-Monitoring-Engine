@@ -1,3 +1,22 @@
+# ============================================================
+# Sales Monitoring Engine - Python Dependencies
+# ============================================================
+# Minimum Python version: 3.11
+
+# Web scraping and HTML parsing (Script 1_1)
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+
+# Data manipulation and analysis (Script 1_2)
 pandas>=2.0.0
 numpy>=1.24.0
+
+# DeepSeek API client (both scripts)
 openai>=1.0.0
+
+# Optional: For better performance in pandas (not required)
+# pyarrow>=14.0.0
+
+# Notes:
+# - SQLite3 is built into Python, no installation needed.
+# - All dependencies are compatible with Python 3.11+ and GitHub Actions runners.
