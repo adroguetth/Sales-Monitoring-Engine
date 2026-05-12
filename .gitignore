@@ -1,0 +1,75 @@
+# ============================================================
+# Sales Monitoring Engine - Git Ignore Rules
+# ============================================================
+
+# -------------------------------
+# Python & virtual environments
+# -------------------------------
+__pycache__/
+*.py[cod]
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# -------------------------------
+# Database files (generated daily)
+# -------------------------------
+# Ignore all SQLite databases except the event dates JSON
+*.db
+*.sqlite
+*.sqlite3
+data/sales/*.db
+!data/event_date/*.json
+
+# -------------------------------
+# Logs and temporary files
+# -------------------------------
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+# -------------------------------
+# IDE / Editor files
+# -------------------------------
+.vscode/
+.idea/
+*.sublime-*
+.project
+.pydevproject
+
+# -------------------------------
+# OS junk files
+# -------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -------------------------------
+# GitHub Actions / CI artifacts
+# -------------------------------
+*.zip
+*.tar.gz
+*.artifact
+
+# -------------------------------
+# Sensitive credentials (example)
+# -------------------------------
+.env
+.secrets
+*_key.py
+config_local.py
+
+# -------------------------------
+# Large generated data
+# -------------------------------
+charts_archive/         # Not used in this project, but kept from template
+*.csv
