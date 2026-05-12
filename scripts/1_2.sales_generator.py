@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Sales Monitoring Engine - Daily Sales Fact Table Generator (v2.0)
+Sales Monitoring Engine - Daily Sales Fact Table Generator (v2.1)
 Features:
 - Reads dynamic event dates (CyberDay, CyberMonday, Black Friday) from local/remote JSON.
 - Applies demand multipliers during those events based on confidence.
 - Simulates realistic sales with seasonality, holidays, promotions, and stockouts.
 - Optional DeepSeek AI for stockout prediction.
 - Outputs SQLite database with rich analytical columns.
+- Auto-creates database files in data/sales/YYYY-MM-DD.db (if no --db provided).
 """
 
 import os
@@ -89,7 +90,6 @@ def load_event_dates(year: int) -> Dict[str, Dict]:
 
 # -----------------------------------------------------------------------------
 # Product configuration (25 products)
-# Structure: product_id: (name, category, base_demand, promo_sensitivity, weekend_sensitivity, max_stock)
 # -----------------------------------------------------------------------------
 PRODUCTS = {
     1: ("Rice", "grocery", 120, 0.4, 1.15, 600),
@@ -173,7 +173,7 @@ STORES = {
 }
 
 # -----------------------------------------------------------------------------
-# Holiday configuration (total closures, early closures, pre/post effects)
+# Holiday configuration
 # -----------------------------------------------------------------------------
 TOTAL_CLOSURE_HOLIDAYS = [
     ("01-01", "New Year"),
@@ -247,7 +247,7 @@ PROMOTION_TYPES = {
 }
 
 # -----------------------------------------------------------------------------
-# Helper functions (date, holidays, payday, seasonal, etc.)
+# Helper functions
 # -----------------------------------------------------------------------------
 def get_today() -> datetime:
     return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -258,7 +258,6 @@ def get_yesterday(date: datetime = None) -> datetime:
     return date - timedelta(days=1)
 
 def get_good_friday(year: int) -> datetime:
-    # Computus algorithm (Gregorian)
     a = year % 19
     b = year // 100
     c = year % 100
@@ -304,7 +303,7 @@ def get_seasonal_factor(date: datetime, product_id: int, store_id: int) -> float
     month = date.month
     store_data = STORES[store_id]
     _, category, _, _, _, _ = PRODUCTS[product_id]
-    if month in [12, 1, 2]:  # Summer
+    if month in [12, 1, 2]:
         if store_id == 5 and product_id in [14, 15, 18, 19, 22]:
             if product_id == 22:
                 return rng.uniform(1.8, 2.2)
@@ -315,7 +314,7 @@ def get_seasonal_factor(date: datetime, product_id: int, store_id: int) -> float
             return rng.uniform(1.2, 1.4)
         if product_id == 22:
             return rng.uniform(1.3, 1.6)
-    elif month in [6, 7, 8]:  # Winter
+    elif month in [6, 7, 8]:
         if store_id == 5:
             return store_data.get("winter_factor", 0.85)
         if product_id == 20:
@@ -407,10 +406,6 @@ def get_price(product_id: int, promotion_type: Optional[str] = None) -> float:
     return price
 
 def get_event_multiplier(date: datetime, event_dates: Dict[str, Dict]) -> float:
-    """
-    Apply demand multiplier if date falls within a known e‑commerce event.
-    Returns 1.5x for events with high confidence, 1.3x for low/medium.
-    """
     date_str = date.strftime("%Y-%m-%d")
     for event_name, info in event_dates.items():
         start = info["start_date"]
@@ -453,7 +448,7 @@ class DeepSeekIntelligence:
 # Main Sales Data Generator Class
 # -----------------------------------------------------------------------------
 class SalesDataGenerator:
-    FRESH_PRODUCTS = [11, 12, 13, 14, 15, 16]  # daily restock
+    FRESH_PRODUCTS = [11, 12, 13, 14, 15, 16]
 
     def __init__(self, db_path: str, deepseek_api_key: str = None, year: int = None):
         self.db_path = db_path
@@ -467,7 +462,7 @@ class SalesDataGenerator:
         self.products = PRODUCTS
         self.create_fact_table()
         self.current_stocks = self._initialize_stocks()
-        self.active_promotions = {}  # key: (store_id, product_id)
+        self.active_promotions = {}
 
         if deepseek_api_key:
             self.ai = DeepSeekIntelligence(deepseek_api_key, db_path)
@@ -647,7 +642,6 @@ class SalesDataGenerator:
                     stockout_flag = False
                 new_stock = max(0, current_stock - units_sold)
                 self.current_stocks[(store_id, product_id)] = new_stock
-                # Restock logic
                 _, _, _, _, _, max_stock = PRODUCTS[product_id]
                 if product_id in self.FRESH_PRODUCTS:
                     new_stock = max_stock
@@ -724,16 +718,28 @@ class SalesDataGenerator:
 def main():
     parser = argparse.ArgumentParser(description="Daily Sales Fact Table Generator with dynamic event dates")
     parser.add_argument("--date", type=str, help="Target date (YYYY-MM-DD). Defaults to yesterday")
-    parser.add_argument("--db", type=str, default="sales_monitoring.db", help="Output SQLite database path")
+    parser.add_argument("--db", type=str, default=None, help="Output SQLite database path. Default: data/sales/YYYY-MM-DD.db")
     parser.add_argument("--year", type=int, help="Year for event dates (default: current year)")
     args = parser.parse_args()
+
     if args.date:
         target_date = datetime.strptime(args.date, "%Y-%m-%d")
     else:
         target_date = get_yesterday()
         logger.info(f"No date specified, using yesterday: {target_date.strftime('%Y-%m-%d')}")
+
+    # Auto-generate database path if not provided
+    if args.db is None:
+        db_dir = Path(__file__).parent.parent / "data" / "sales"
+        db_dir.mkdir(parents=True, exist_ok=True)
+        db_path = db_dir / f"{target_date.strftime('%Y-%m-%d')}.db"
+        logger.info(f"Auto-generating database: {db_path}")
+    else:
+        db_path = Path(args.db)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
     api_key = os.environ.get("DEEPSEEK_API_KEY")
-    generator = SalesDataGenerator(db_path=args.db, deepseek_api_key=api_key, year=args.year)
+    generator = SalesDataGenerator(db_path=str(db_path), deepseek_api_key=api_key, year=args.year)
     success = generator.run_daily(target_date)
     generator.close()
     return 0 if success else 1
