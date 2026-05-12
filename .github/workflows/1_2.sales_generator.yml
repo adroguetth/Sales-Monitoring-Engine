@@ -1,34 +1,42 @@
+# .github/workflows/sales_generator.yml
 name: Sales Data Generator
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '0 6 * * *'   # Todos los días a las 06:00 UTC
   workflow_dispatch:
     inputs:
       target_date:
-        description: 'Target date (YYYY-MM-DD)'
+        description: 'Fecha objetivo (YYYY-MM-DD). Vacío = ayer'
         required: false
         type: string
       force_refresh:
-        description: 'Force re-run even if DB exists'
+        description: 'Ignorar caché y regenerar'
         required: false
         type: boolean
         default: false
 
 permissions:
-  contents: read
+  contents: write   # Necesario para hacer push al repositorio
 
 jobs:
-  generate:
+  generate-sales:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Para evitar conflictos en push
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install pandas numpy openai
 
-      - name: Determine target date
+      - name: Instalar dependencias
+        run: pip install pandas numpy openai
+
+      - name: Determinar fecha y ruta
         id: date
         run: |
           if [ -n "${{ github.event.inputs.target_date }}" ]; then
@@ -40,7 +48,7 @@ jobs:
           echo "db_file=data/sales/${TARGET_DATE}.db" >> $GITHUB_OUTPUT
           mkdir -p data/sales
 
-      - name: Run sales generator
+      - name: Ejecutar generador de ventas
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
@@ -48,16 +56,17 @@ jobs:
             --date ${{ steps.date.outputs.target_date }} \
             --db ${{ steps.date.outputs.db_file }}
 
-      - name: Verify database content
+      - name: Verificar contenido de la base de datos
         run: |
-          echo "Database file: ${{ steps.date.outputs.db_file }}"
+          echo "Archivo: ${{ steps.date.outputs.db_file }}"
           ls -la ${{ steps.date.outputs.db_file }}
-          echo "Record count:"
-          sqlite3 ${{ steps.date.outputs.db_file }} "SELECT COUNT(*) FROM sales_data;" || echo "Table not found or empty"
+          echo "Registros:"
+          sqlite3 ${{ steps.date.outputs.db_file }} "SELECT COUNT(*) FROM sales_data;"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sales-data-${{ github.run_id }}
-          path: ${{ steps.date.outputs.db_file }}
-          retention-days: 30
+      - name: Commit y push al repositorio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ${{ steps.date.outputs.db_file }}
+          git diff --staged --quiet || git commit -m "Actualizar ventas para ${{ steps.date.outputs.target_date }}"
+          git push
