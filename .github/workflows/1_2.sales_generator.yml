@@ -1,5 +1,5 @@
 # .github/workflows/sales_generator.yml
-# Genera la base de datos de ventas diaria y la sube como artifact (no se guarda en el repo)
+# Genera la base de datos de ventas diaria y la guarda en data/sales/ del repo
 
 name: Sales Data Generator
 
@@ -14,7 +14,7 @@ on:
         type: string
 
 permissions:
-  contents: read   # Solo lectura (no necesita escribir)
+  contents: write   # ← Cambiado de 'read' a 'write' para poder hacer push
 
 jobs:
   generate-sales:
@@ -23,7 +23,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1   # No necesitas historial completo
+          fetch-depth: 1
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -49,9 +49,10 @@ jobs:
         run: |
           python scripts/1_2.sales_generator.py --date ${{ steps.date.outputs.target_date }}
 
-      - name: Upload database artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sales-data-${{ steps.date.outputs.target_date }}
-          path: data/sales/${{ steps.date.outputs.target_date }}.db
-          retention-days: 30
+      - name: Commit and push database to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/sales/${{ steps.date.outputs.target_date }}.db
+          git diff --cached --quiet || git commit -m "chore: add sales data for ${{ steps.date.outputs.target_date }}"
+          git push
