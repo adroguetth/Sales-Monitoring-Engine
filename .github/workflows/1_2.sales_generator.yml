@@ -89,7 +89,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "🔭 No changes to commit"
           else
-            git commit -m "📊 Add sales data for ${{ steps.date.outputs.target_date }} [automated]"
+            git commit -m "🛍️ Add sales data for ${{ steps.date.outputs.target_date }} [automated]"
             
             echo "⬇️ Pulling latest changes with rebase..."
             git pull --rebase origin main
