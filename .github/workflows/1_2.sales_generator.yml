@@ -1,39 +1,51 @@
 # .github/workflows/sales_generator.yml
-# Genera la base de datos de ventas diaria y la guarda en data/sales/ del repo
+# Generates daily sales database and stores it in data/sales/ of the repository
 
-name: Sales Data Generator
+name: 1_2. Sales Data Generator
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # Todos los días a las 06:00 UTC
+    - cron: '0 6 * * *'   # Daily at 06:00 UTC
   workflow_dispatch:
     inputs:
       target_date:
-        description: 'Fecha objetivo (YYYY-MM-DD). Vacío = ayer'
+        description: 'Target date (YYYY-MM-DD). Empty = yesterday'
         required: false
         type: string
 
 permissions:
-  contents: write   # ← Cambiado de 'read' a 'write' para poder hacer push
+  contents: write   # Required to push generated database to repository
+
+env:
+  RETENTION_DAYS: 30   # Keep last 30 days of sales data
 
 jobs:
   generate-sales:
+    name: 📊 Generate Daily Sales Data
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
     steps:
-      - name: Checkout repository
+      - name: 📚 Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 1   # Shallow clone sufficient for single file commit
 
-      - name: Setup Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install dependencies
-        run: pip install pandas numpy openai
+      - name: 📦 Install dependencies
+        run: |
+          pip install pandas numpy openai
 
-      - name: Determine target date
+      - name: 📁 Create directory structure
+        run: |
+          mkdir -p data/sales
+
+      - name: 🎯 Determine target date
         id: date
         run: |
           if [ -n "${{ github.event.inputs.target_date }}" ]; then
@@ -42,17 +54,102 @@ jobs:
             TARGET_DATE=$(date -d 'yesterday' +%Y-%m-%d)
           fi
           echo "target_date=$TARGET_DATE" >> $GITHUB_OUTPUT
+          echo "📅 Target date: $TARGET_DATE"
 
-      - name: Run sales generator
+      - name: 🚀 Run sales generator
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           python scripts/1_2.sales_generator.py --date ${{ steps.date.outputs.target_date }}
 
-      - name: Commit and push database to repo
+      - name: ✅ Verify results
         run: |
-          git config user.name  "github-actions[bot]"
+          echo "📊 Verifying execution results..."
+          
+          DB_FILE="data/sales/${{ steps.date.outputs.target_date }}.db"
+          echo "📂 Sales database:"
+          ls -lah $DB_FILE 2>/dev/null || echo "❌ Database not found"
+          
+          echo -e "\n📈 File statistics:"
+          find data/sales -type f -name "*.db" -exec ls -lh {} \; 2>/dev/null | tail -5 | awk '{print $5, $9}'
+          
+          echo -e "\n📊 Total sales databases in repository:"
+          find data/sales -type f -name "*.db" 2>/dev/null | wc -l
+
+      - name: 📤 Commit and push database to repository
+        run: |
+          echo "📝 Preparing commit..."
+          
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/sales/${{ steps.date.outputs.target_date }}.db
-          git diff --cached --quiet || git commit -m "chore: add sales data for ${{ steps.date.outputs.target_date }}"
-          git push
+          
+          DB_FILE="data/sales/${{ steps.date.outputs.target_date }}.db"
+          git add $DB_FILE
+          
+          if git diff --cached --quiet; then
+            echo "🔭 No changes to commit"
+          else
+            git commit -m "📊 Add sales data for ${{ steps.date.outputs.target_date }} [automated]"
+            
+            echo "⬇️ Pulling latest changes with rebase..."
+            git pull --rebase origin main
+            
+            echo "⬆️ Pushing changes to repository..."
+            git push origin HEAD:main
+            echo "✅ Changes pushed successfully"
+          fi
+
+      - name: 📦 Upload artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sales-db-debug-${{ github.run_number }}
+          path: |
+            data/sales/
+          retention-days: 7
+
+      - name: 🗑️ Clean old databases (retention policy)
+        if: success()
+        run: |
+          echo "🧹 Applying retention policy (${RETENTION_DAYS} days)..."
+          
+          # Keep only databases newer than RETENTION_DAYS
+          find data/sales -type f -name "*.db" -mtime +${RETENTION_DAYS} -exec rm -v {} \;
+          
+          # Commit deletions if any
+          git add data/sales/
+          if git diff --cached --quiet; then
+            echo "🔭 No old files to clean"
+          else
+            git commit -m "🧹 Remove sales data older than ${RETENTION_DAYS} days [automated]"
+            git pull --rebase origin main
+            git push origin HEAD:main
+            echo "✅ Retention cleanup completed"
+          fi
+
+      - name: 📋 Final report
+        if: always()
+        run: |
+          echo "========================================"
+          echo "📊 SALES GENERATOR EXECUTION REPORT"
+          echo "========================================"
+          echo "📅 Date: $(date)"
+          echo "📌 Trigger: ${{ github.event_name }}"
+          echo "🔗 Commit: ${{ github.sha }}"
+          echo "🎯 Target date: ${{ steps.date.outputs.target_date }}"
+          echo ""
+          
+          DB_FILE="data/sales/${{ steps.date.outputs.target_date }}.db"
+          if [ -f "$DB_FILE" ]; then
+            SIZE=$(stat -c%s "$DB_FILE")
+            echo "✅ Sales database: $((SIZE / 1024)) KB"
+          else
+            echo "❌ Sales database not found"
+          fi
+          
+          TOTAL_DBS=$(find data/sales -type f -name "*.db" 2>/dev/null | wc -l)
+          echo "📦 Total historical databases: $TOTAL_DBS"
+          
+          echo ""
+          echo "✅ Process completed"
+          echo "========================================"
