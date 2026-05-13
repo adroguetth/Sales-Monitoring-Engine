@@ -1,6 +1,5 @@
 # .github/workflows/event_date_fetcher.yml
 # Production-ready event date fetcher for Chilean e‑commerce dates.
-# Output: data/event_date/event_dated.json committed to the repository.
 
 name: 1_1. Event Date Fetcher
 
