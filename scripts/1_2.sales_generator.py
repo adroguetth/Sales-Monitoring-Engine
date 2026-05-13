@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sales Monitoring Engine - Daily Sales Fact Table Generator (v2.1)
+Sales Monitoring Engine - Daily Sales Fact Table Generator
 Features:
 - Reads dynamic event dates (CyberDay, CyberMonday, Black Friday) from local/remote JSON.
 - Applies demand multipliers during those events based on confidence.
