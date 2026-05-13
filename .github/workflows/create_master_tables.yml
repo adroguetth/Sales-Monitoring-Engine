@@ -1,0 +1,37 @@
+# .github/workflows/create_master_tables.yml
+# Creates static master databases (products, stores) for Sales Monitoring Engine
+# Trigger: manual only (workflow_dispatch)
+
+name: 1_0. Create Master Tables
+
+on:
+  workflow_dispatch:          # Only manual trigger
+
+permissions:
+  contents: write             # Needed to commit the generated databases
+
+jobs:
+  build-master:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run master tables creation
+        run: |
+          python scripts/1_0.create_master_tables.py
+
+      - name: Commit and push generated databases
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/products/products_master.db data/stores/stores_master.db
+          git diff --staged --quiet || git commit -m "📦 Update master databases [automated]"
+          git push
