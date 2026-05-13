@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Sales Monitoring Engine - Daily Sales Fact Table Generator (v3.0)
-------------------------------------------------------------------
+Sales Monitoring Engine - Daily Sales Fact Table Generator
+----------------------------------------------------------
 Generates daily sales fact table for 5 stores and 25 products using
 master reference data from `products_master.db` and `stores_master.db`.
 
-All product and store attributes are read from the master databases,
+All product and store attributes are loaded from the master databases,
 ensuring a single source of truth. The output fact table (`sales_data`)
-references those dimensions via store_id and product_id.
+stores foreign key references logically (no physical FOREIGN KEY constraints
+because the dimension tables reside in separate database files).
 
-Usage:
-    python scripts/1_2.sales_generator.py [--date YYYY-MM-DD] [--db PATH]
+Output location: data/sales/YYYY-MM-DD.db
 """
 
 import os
@@ -51,20 +51,22 @@ EVENT_JSON_URL = "https://raw.githubusercontent.com/adroguetth/Sales-Monitoring-
 
 
 # -----------------------------------------------------------------------------
-# Helper functions (date, holidays, etc.) – unchanged logic
+# Helper functions (date, holidays, etc.)
 # -----------------------------------------------------------------------------
 def get_today() -> datetime:
+    """Return current date without time component."""
     return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def get_yesterday(date: datetime = None) -> datetime:
+    """Return yesterday's date; if no date provided, use today."""
     if date is None:
         date = get_today()
     return date - timedelta(days=1)
 
 
 def get_good_friday(year: int) -> datetime:
-    """Computus algorithm for Easter Sunday, then subtract 2 days."""
+    """Calculate Good Friday using the Computus algorithm (Gregorian)."""
     a = year % 19
     b = year // 100
     c = year % 100
@@ -84,15 +86,15 @@ def get_good_friday(year: int) -> datetime:
 
 
 def get_maundy_thursday(year: int) -> datetime:
+    """Return Maundy Thursday (Thursday before Easter)."""
     return get_good_friday(year) - timedelta(days=1)
 
 
 def get_store_status(date: datetime) -> Tuple[str, float]:
     """
-    Determine store operating status.
-    Returns (status, operation_factor) with status in {"closed","early_close","full_day"}.
+    Determine store operating status for a given date.
+    Returns (status, operation_factor) where status in {"closed","early_close","full_day"}.
     """
-    # Fixed total closure holidays
     TOTAL_CLOSURE = [
         ("01-01", "New Year"),
         ("05-01", "Labor Day"),
@@ -140,9 +142,7 @@ def get_seasonal_factor(date: datetime, product: Dict, store: Dict) -> float:
     Includes coastal store special effects.
     """
     month = date.month
-    # Summer (December - February)
-    if month in [12, 1, 2]:
-        # Coastal store extra boost for fruits, vegetables, soda, beer
+    if month in [12, 1, 2]:   # Summer
         if store["store_id"] == 5 and product["product_id"] in [14, 15, 18, 19, 22]:
             if product["product_id"] == 22:   # Beer
                 return rng.uniform(1.8, 2.2)
@@ -153,9 +153,8 @@ def get_seasonal_factor(date: datetime, product: Dict, store: Dict) -> float:
             return rng.uniform(1.2, 1.4)
         if product["product_id"] == 22:         # Beer
             return rng.uniform(1.3, 1.6)
-    # Winter (June - August)
-    elif month in [6, 7, 8]:
-        if store["store_id"] == 5:   # Coastal winter reduction
+    elif month in [6, 7, 8]:   # Winter
+        if store["store_id"] == 5:
             return store.get("winter_factor", 0.85)
         if product["product_id"] == 20:   # Yerba Mate
             return rng.uniform(1.2, 1.4)
@@ -169,7 +168,6 @@ def get_holiday_pre_factor(date: datetime, product_id: int, year: int) -> float:
     Pre‑holiday demand boost. Increases as the holiday approaches.
     Returns multiplier between 0.5 and 3.5.
     """
-    # Pre‑holiday effects definition (same as before, but as a local dict for brevity)
     PRE_HOLIDAY_EFFECTS = {
         "new_year": {
             "date_func": lambda y: datetime(y, 1, 1),
@@ -235,9 +233,6 @@ def get_holiday_post_factor(date: datetime, product_id: int, year: int) -> float
         "fiestas_patrias": {"days_post": 7, "base_factor": 0.70},
         "christmas": {"days_post": 2, "base_factor": 0.85}
     }
-    factor = 1.0
-    # Map holiday name to date function (simplified)
-    # We'll iterate through the same keys as above
     pre_effects = {
         "new_year": lambda y: datetime(y, 1, 1),
         "easter": lambda y: get_good_friday(y),
@@ -245,6 +240,7 @@ def get_holiday_post_factor(date: datetime, product_id: int, year: int) -> float
         "fiestas_patrias": lambda y: datetime(y, 9, 18),
         "christmas": lambda y: datetime(y, 12, 25)
     }
+    factor = 1.0
     for holiday, config in POST_HOLIDAY_EFFECTS.items():
         holiday_date = pre_effects[holiday](year)
         days_diff = (date - holiday_date).days
@@ -260,7 +256,6 @@ def get_promotion(product: Dict, date: datetime, store: Dict) -> Tuple[bool, Opt
     Determine if a promotion is active and return its parameters.
     Returns (is_active, promotion_type, multiplier, promotion_value).
     """
-    # Promotion definitions (same as before)
     PROMOTION_TYPES = {
         "2x1": {"base_multiplier": 1.6, "decay": 0.15, "duration_days": 4},
         "3x2": {"base_multiplier": 1.4, "decay": 0.15, "duration_days": 5},
@@ -277,7 +272,7 @@ def get_promotion(product: Dict, date: datetime, store: Dict) -> Tuple[bool, Opt
     is_weekend = date.weekday() >= 5
     is_month_end = date.day >= 25
     store_bonus = store.get("promo_sensitivity_bonus", 0.0)
-    # Pre‑holiday boost
+
     year = date.year
     is_pre_holiday = False
     pre_events = [
@@ -291,6 +286,7 @@ def get_promotion(product: Dict, date: datetime, store: Dict) -> Tuple[bool, Opt
         if 1 <= days <= 3:
             is_pre_holiday = True
             break
+
     prob = 0.05
     prob += 0.08 if is_weekend else 0
     prob += 0.05 if is_month_end else 0
@@ -397,7 +393,7 @@ class DeepSeekIntelligence:
     def predict_stockout_risk(self, product_id: int, store_id: int,
                               date: datetime, current_stock: int,
                               demand: int, product: Dict) -> float:
-        """Predict stockout probability using rule‑based fallback (simplified)."""
+        """Predict stockout probability using rule‑based model."""
         is_weekend = date.weekday() >= 5
         base_risk = 0.03 if not is_weekend else 0.08
         store_risks = {1: 0.04, 2: 0.02, 3: 0.06, 4: 0.03, 5: 0.05}
@@ -439,8 +435,6 @@ class SalesDataGenerator:
         # Create output directory if needed
         os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
         self.conn = sqlite3.connect(db_path)
-        # Enable foreign key constraints (SQLite default is OFF)
-        self.conn.execute("PRAGMA foreign_keys = ON;")
         self.create_fact_table()
         self.current_stocks = self._initialize_stocks()
         self.active_promotions = {}
@@ -528,7 +522,11 @@ class SalesDataGenerator:
         return stocks
 
     def create_fact_table(self):
-        """Create the sales fact table with foreign keys referencing dimension tables."""
+        """
+        Create the sales fact table without foreign key constraints.
+        Referential integrity is maintained by application logic because
+        store_id and product_id are validated against loaded master data.
+        """
         cursor = self.conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sales_data (
@@ -558,16 +556,10 @@ class SalesDataGenerator:
                 payday_factor REAL,
                 location_factor REAL,
                 event_multiplier REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (store_id) REFERENCES stores(store_id),
-                FOREIGN KEY (product_id) REFERENCES products(product_id)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # We cannot enforce foreign keys if referencing tables are in separate databases.
-        # Actually, SQLite foreign keys only work within the same database.
-        # To maintain referential integrity, we will not enforce foreign keys at DB level,
-        # but keep the columns as logical references.
-        # The master databases are separate, so we skip foreign key enforcement here.
+        # Indexes for analytical queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_date ON sales_data(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_store_product ON sales_data(store_id, product_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_week ON sales_data(year, week_of_year)")
@@ -775,6 +767,7 @@ class SalesDataGenerator:
         return pd.DataFrame(records)
 
     def insert_to_database(self, df: pd.DataFrame, target_date: datetime) -> bool:
+        """Insert generated sales data into the SQLite fact table."""
         try:
             cursor = self.conn.cursor()
             cursor.execute("DELETE FROM sales_data WHERE date = ?", (target_date.strftime("%Y-%m-%d"),))
@@ -790,6 +783,7 @@ class SalesDataGenerator:
             return False
 
     def run_daily(self, target_date: datetime = None) -> bool:
+        """Run daily sales generation and insertion. Defaults to yesterday."""
         if target_date is None:
             target_date = get_yesterday()
         df = self.generate_daily_sales(target_date)
