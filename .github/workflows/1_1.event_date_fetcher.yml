@@ -1,11 +1,8 @@
 # .github/workflows/event_date_fetcher.yml
 # Production-ready event date fetcher for Chilean e‑commerce dates.
-# Triggers:
-#   - Manual (workflow_dispatch)
-#   - Scheduled every Monday at 08:00 UTC (avoids rate limits, keeps data fresh)
 # Output: data/event_date/event_dated.json committed to the repository.
 
-name: Event Date Fetcher
+name: 1_1. Event Date Fetcher
 
 on:
   workflow_dispatch:
@@ -27,24 +24,36 @@ on:
 permissions:
   contents: write   # Required to commit the updated JSON file
 
+env:
+  RETENTION_DAYS: 30
+
 jobs:
   fetch-and-update:
+    name: 📅 Fetch Event Dates
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
     steps:
-      - name: Checkout repository
+      - name: 📚 Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0   # Full history for safe commit
 
-      - name: Set up Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install dependencies
-        run: pip install requests beautifulsoup4 openai
+      - name: 📦 Install dependencies
+        run: |
+          pip install requests beautifulsoup4 openai
 
-      - name: Run event date fetcher
+      - name: 📁 Create directory structure
+        run: |
+          mkdir -p data/event_date
+
+      - name: 🚀 Run event date fetcher
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
@@ -64,10 +73,71 @@ jobs:
           echo "Executing: $CMD"
           eval $CMD
 
-      - name: Commit and push updated event dates
+      - name: ✅ Verify results
         run: |
+          echo "📊 Verifying execution results..."
+          
+          echo "📂 Event date file:"
+          ls -lah data/event_date/event_dated.json 2>/dev/null || echo "❌ event_dated.json not found"
+          
+          echo -e "\n📈 File statistics:"
+          find data/event_date -type f -name "*.json" -exec ls -lh {} \; 2>/dev/null | awk '{print $5, $9}'
+
+      - name: 📤 Commit and push changes
+        run: |
+          echo "📝 Preparing commit..."
+          
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
           git add data/event_date/event_dated.json
-          git diff --staged --quiet || git commit -m "chore: update event dates for $(date +%Y-%m-%d)"
-          git push
+          
+          if git diff --cached --quiet; then
+            echo "🔭 No changes to commit"
+          else
+            DATE=$(date +'%Y-%m-%d')
+            git commit -m "📅 Update event dates ${DATE} [automated]"
+            
+            echo "⬇️ Pulling latest changes with rebase..."
+            git pull --rebase origin main
+            
+            echo "⬆️ Pushing changes to repository..."
+            git push origin HEAD:main
+            echo "✅ Changes pushed successfully"
+          fi
+
+      - name: 📦 Upload artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: event-date-debug-${{ github.run_number }}
+          path: |
+            data/event_date/
+          retention-days: 7
+
+      - name: 📋 Final report
+        if: always()
+        run: |
+          echo "========================================"
+          echo "📅 EVENT DATE FETCHER EXECUTION REPORT"
+          echo "========================================"
+          echo "📅 Date: $(date)"
+          echo "📌 Trigger: ${{ github.event_name }}"
+          echo "🔗 Commit: ${{ github.sha }}"
+          echo ""
+          
+          if [ -f "data/event_date/event_dated.json" ]; then
+            SIZE=$(stat -c%s "data/event_date/event_dated.json")
+            echo "✅ event_dated.json: $((SIZE / 1024)) KB"
+            
+            # Show first line of JSON (compact preview)
+            echo "📋 Preview:"
+            head -c 200 data/event_date/event_dated.json
+            echo "..."
+          else
+            echo "❌ event_dated.json not found"
+          fi
+          
+          echo ""
+          echo "✅ Process completed"
+          echo "========================================"
