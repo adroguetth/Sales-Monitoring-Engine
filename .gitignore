@@ -24,7 +24,7 @@ build/
 *.db
 *.sqlite
 *.sqlite3
-data/sales/*.db
+!data/sales/*.db
 !data/event_date/*.json
 
 # -------------------------------
