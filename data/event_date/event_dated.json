@@ -1,6 +1,6 @@
 {
   "year": 2026,
-  "fetched_at": "2026-05-11T19:41:51.134027",
+  "fetched_at": "2026-06-15T13:51:45.709457",
   "events": {
     "CyberDay": {
       "event": "CyberDay",
@@ -15,12 +15,12 @@
     "CyberMonday": {
       "event": "CyberMonday",
       "year": 2026,
-      "start_date": "2026-10-12",
-      "end_date": "2026-10-14",
+      "start_date": "2026-10-05",
+      "end_date": "2026-10-07",
       "duration_days": 3,
-      "source": "historical_estimation",
-      "confidence": "low",
-      "notes": "Historical estimation: second Monday of October, 3 days."
+      "source": "deepseek_web_search",
+      "confidence": "medium",
+      "notes": "Based on historical patterns and media reports (T13, Meganoticias)."
     },
     "BlackFriday": {
       "event": "BlackFriday",
